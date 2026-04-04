@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: sql-agent
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false          # You set this in the Render dashboard
+      - key: DATA_DIR
+        value: /data
+    disk:
+      name: sql-agent-data
+      mountPath: /data
+      sizeGB: 1
+    healthCheckPath: /health
