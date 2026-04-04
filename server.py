@@ -6,6 +6,7 @@ Supports: SQLite, PostgreSQL, MySQL/MariaDB
 import csv
 import io
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -42,6 +43,8 @@ from firebase_admin import auth as fb_auth, credentials as fb_creds
 _FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "")
 _FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
 _FIREBASE_SERVICE_ACCOUNT_PATH = os.environ.get("FIREBASE_SERVICE_ACCOUNT_PATH", "")
+_FIREBASE_INIT_ERROR: Optional[str] = None
+logger = logging.getLogger(__name__)
 
 
 def _firebase_enabled() -> bool:
@@ -53,18 +56,23 @@ def _firebase_enabled() -> bool:
 
 
 def _init_firebase():
+    global _FIREBASE_INIT_ERROR
     if firebase_admin._apps:
         return
-    if _FIREBASE_SERVICE_ACCOUNT_JSON:
-        cred = fb_creds.Certificate(json.loads(_FIREBASE_SERVICE_ACCOUNT_JSON))
-        firebase_admin.initialize_app(cred)
-    elif _FIREBASE_SERVICE_ACCOUNT_PATH:
-        cred = fb_creds.Certificate(_FIREBASE_SERVICE_ACCOUNT_PATH)
-        firebase_admin.initialize_app(cred)
-    elif _FIREBASE_PROJECT_ID:
-        # Minimal init — only needs project ID to verify tokens
-        firebase_admin.initialize_app(options={"projectId": _FIREBASE_PROJECT_ID})
-    # else: auth disabled (local dev without Firebase)
+    try:
+        if _FIREBASE_SERVICE_ACCOUNT_JSON:
+            cred = fb_creds.Certificate(json.loads(_FIREBASE_SERVICE_ACCOUNT_JSON))
+            firebase_admin.initialize_app(cred)
+        elif _FIREBASE_SERVICE_ACCOUNT_PATH:
+            cred = fb_creds.Certificate(_FIREBASE_SERVICE_ACCOUNT_PATH)
+            firebase_admin.initialize_app(cred)
+        elif _FIREBASE_PROJECT_ID:
+            # Minimal init — only needs project ID to verify tokens
+            firebase_admin.initialize_app(options={"projectId": _FIREBASE_PROJECT_ID})
+        _FIREBASE_INIT_ERROR = None
+    except Exception as exc:
+        _FIREBASE_INIT_ERROR = str(exc)
+        logger.exception("Firebase initialization failed")
 
 _init_firebase()
 
@@ -74,6 +82,8 @@ async def _get_uid(request: Request) -> str:
     if not _firebase_enabled():
         # Auth disabled (local dev) — use a fixed dev uid
         return "dev-user"
+    if _FIREBASE_INIT_ERROR:
+        raise HTTPException(status_code=503, detail="Firebase authentication is not configured correctly")
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Authorization header")
@@ -933,6 +943,9 @@ async def ws_query(websocket: WebSocket, conn_id: str):
         # Auth: token in WS payload (browsers can't set WS headers)
         uid = "dev-user"
         if _firebase_enabled():
+            if _FIREBASE_INIT_ERROR:
+                await send({"type": "failed", "message": "Firebase authentication is not configured correctly"})
+                return
             token = payload.get("token", "")
             if not token:
                 await send({"type": "failed", "message": "Unauthorized"})
@@ -1091,7 +1104,13 @@ async def bootstrap(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "users": len(_connections)}
+    return {
+        "status": "ok",
+        "users": len(_connections),
+        "firebase_enabled": _firebase_enabled(),
+        "firebase_ready": _FIREBASE_INIT_ERROR is None,
+        "firebase_error": _FIREBASE_INIT_ERROR,
+    }
 
 
 # ── Serve frontend ────────────────────────────────────────────────────────────
