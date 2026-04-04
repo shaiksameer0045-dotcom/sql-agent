@@ -23,22 +23,96 @@ if _env_file.exists():
             os.environ.setdefault(_k.strip(), _v.strip())
 
 from groq import AsyncGroq
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 # ── Config ───────────────────────────────────────────────────────────────────
-DATA_DIR         = Path(os.environ.get("DATA_DIR", "."))
+DATA_DIR   = Path(os.environ.get("DATA_DIR", "."))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-CONNECTIONS_FILE = DATA_DIR / "connections.json"
-MODEL            = "llama-3.3-70b-versatile"
-MAX_TOKENS       = 2048
-MAX_RETRIES      = 3
+MODEL      = "llama-3.3-70b-versatile"
+MAX_TOKENS = 2048
+MAX_RETRIES = 3
 
-# ── Connection registry (in-memory for live connections) ─────────────────────
-_connections: dict[str, dict] = {}   # id → connection config
-_live: dict[str, Any] = {}           # id → live db connection object
+# ── Firebase Admin init ───────────────────────────────────────────────────────
+import firebase_admin
+from firebase_admin import auth as fb_auth, credentials as fb_creds
+
+_FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "")
+
+def _init_firebase():
+    if firebase_admin._apps:
+        return
+    sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+    if sa_json:
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(sa_json)
+            tmp = f.name
+        cred = fb_creds.Certificate(tmp)
+        firebase_admin.initialize_app(cred)
+    elif _FIREBASE_PROJECT_ID:
+        # Minimal init — only needs project ID to verify tokens
+        firebase_admin.initialize_app(options={"projectId": _FIREBASE_PROJECT_ID})
+    # else: auth disabled (local dev without Firebase)
+
+_init_firebase()
+
+
+async def _get_uid(request: Request) -> str:
+    """Extract and verify Firebase ID token → return uid. Raises 401 on failure."""
+    if not _FIREBASE_PROJECT_ID and not os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON"):
+        # Auth disabled (local dev) — use a fixed dev uid
+        return "dev-user"
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    token = auth_header[7:]
+    try:
+        decoded = fb_auth.verify_id_token(token)
+        return decoded["uid"]
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
+
+
+# ── Per-user connection registry ──────────────────────────────────────────────
+# _connections[uid][conn_id] = config dict
+# _live[uid][conn_id]        = live DB connection object
+_connections: dict[str, dict[str, dict]] = {}
+_live:        dict[str, dict[str, Any]]  = {}
+
+
+def _user_conns(uid: str) -> dict[str, dict]:
+    if uid not in _connections:
+        _connections[uid] = {}
+        _load_connections(uid)
+    return _connections[uid]
+
+
+def _user_live(uid: str) -> dict[str, Any]:
+    if uid not in _live:
+        _live[uid] = {}
+    return _live[uid]
+
+
+def _connections_file(uid: str) -> Path:
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", uid)
+    return DATA_DIR / f"connections_{safe}.json"
+
+
+def _save_connections(uid: str):
+    conns = _connections.get(uid, {})
+    safe  = {cid: {k: v for k, v in cfg.items() if k != "password"}
+             for cid, cfg in conns.items()}
+    _connections_file(uid).write_text(json.dumps(safe, indent=2))
+
+
+def _load_connections(uid: str):
+    f = _connections_file(uid)
+    if f.exists():
+        data = json.loads(f.read_text())
+        _connections.setdefault(uid, {}).update(data)
 
 
 # ── Driver helpers ────────────────────────────────────────────────────────────
@@ -80,13 +154,13 @@ def _open_connection(cfg: dict):
         raise ValueError(f"Unknown DB type: {t}")
 
 
-def _get_live(conn_id: str):
+def _get_live(conn_id: str, uid: str = "dev-user"):
     """Return live connection, reopening if closed/lost."""
-    cfg = _connections.get(conn_id)
+    cfg = _user_conns(uid).get(conn_id)
     if not cfg:
         raise HTTPException(status_code=404, detail="Connection not found")
 
-    live = _live.get(conn_id)
+    live = _user_live(uid).get(conn_id)
     t = cfg["type"]
 
     # Test if still alive
@@ -108,14 +182,14 @@ def _get_live(conn_id: str):
 
     # Reopen
     live = _open_connection(cfg)
-    _live[conn_id] = live
+    _user_live(uid)[conn_id] = live
     return live
 
 
-def _get_schema(conn_id: str) -> list[dict]:
+def _get_schema(conn_id: str, uid: str = "dev-user") -> list[dict]:
     """Return [{table, columns:[{name,type}], row_count}] for a connection."""
-    cfg = _connections[conn_id]
-    live = _get_live(conn_id)
+    cfg = _user_conns(uid)[conn_id]
+    live = _get_live(conn_id, uid)
     t = cfg["type"]
     cur = live.cursor()
     result = []
@@ -204,10 +278,10 @@ def _coerce(v):
     return v
 
 
-def _execute_sql(conn_id: str, sql: str) -> tuple[list[str], list[list]]:
+def _execute_sql(conn_id: str, sql: str, uid: str = "dev-user") -> tuple[list[str], list[list]]:
     """Execute SQL on a connection. Returns (columns, rows)."""
-    live = _get_live(conn_id)
-    cfg  = _connections[conn_id]
+    live = _get_live(conn_id, uid)
+    cfg  = _user_conns(uid)[conn_id]
     t    = cfg["type"]
 
     # DuckDB has its own API (not DB-API2 cursor model)
@@ -243,14 +317,14 @@ def _execute_sql(conn_id: str, sql: str) -> tuple[list[str], list[list]]:
     return columns, rows
 
 
-def _rich_schema_for_llm(conn_id: str) -> str:
+def _rich_schema_for_llm(conn_id: str, uid: str = "dev-user") -> str:
     """
     Build a rich schema description for the LLM prompt.
     Includes: column types, primary keys, foreign key hints (from naming),
     row counts, and 3 sample rows per table.
     """
-    cfg  = _connections[conn_id]
-    live = _get_live(conn_id)
+    cfg  = _user_conns(uid)[conn_id]
+    live = _get_live(conn_id, uid)
     t    = cfg["type"]
     cur  = live.cursor()
     parts = []
@@ -444,19 +518,6 @@ POSTGRESQL-SPECIFIC RULES:
     return ""
 
 
-# ── Persistence ───────────────────────────────────────────────────────────────
-
-def _save_connections():
-    safe = {cid: {k: v for k, v in cfg.items()} for cid, cfg in _connections.items()}
-    CONNECTIONS_FILE.write_text(json.dumps(safe, indent=2))
-
-
-def _load_connections():
-    if CONNECTIONS_FILE.exists():
-        data = json.loads(CONNECTIONS_FILE.read_text())
-        _connections.update(data)
-
-
 def _extract_sql(text: str) -> str:
     m = re.search(r"```(?:sql)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if m:
@@ -478,36 +539,41 @@ app.add_middleware(
 )
 
 
+def _seed_user_demos(uid: str):
+    """Seed demo SQLite + DuckDB connections for a user if they have none."""
+    _load_connections(uid)
+    conns = _user_conns(uid)
+    has_sqlite = any(c["type"] == "sqlite" and "Demo" in c["name"] for c in conns.values())
+    has_duck   = any(c["type"] == "duckdb" and "Demo" in c["name"] for c in conns.values())
+
+    if not has_sqlite:
+        cid = str(uuid.uuid4())
+        cfg = {"id": cid, "name": "Demo SQLite", "type": "sqlite",
+               "file": str(DATA_DIR / f"demo_{uid[:8]}.db"), "color": "#7c5cfc"}
+        conns[cid] = cfg
+        _seed_demo(cid, uid)
+
+    if not has_duck:
+        did = str(uuid.uuid4())
+        dcfg = {"id": did, "name": "Demo DuckDB", "type": "duckdb",
+                "file": str(DATA_DIR / f"demo_{uid[:8]}.duckdb"), "color": "#f9e2af"}
+        conns[did] = dcfg
+        _seed_demo_duckdb(did, uid)
+
+    _save_connections(uid)
+
+
 @app.on_event("startup")
 async def startup():
     Path("static").mkdir(exist_ok=True)
-    _load_connections()
-    # Seed demo connections if none exist
-    if not _connections:
-        # SQLite demo
-        cid = str(uuid.uuid4())
-        cfg = {
-            "id": cid, "name": "Demo SQLite", "type": "sqlite",
-            "file": str(DATA_DIR / "demo.db"), "color": "#7c5cfc",
-        }
-        _connections[cid] = cfg
-        _seed_demo(cid)
-
-        # DuckDB demo
-        did = str(uuid.uuid4())
-        dcfg = {
-            "id": did, "name": "Demo DuckDB", "type": "duckdb",
-            "file": str(DATA_DIR / "demo.duckdb"), "color": "#f9e2af",
-        }
-        _connections[did] = dcfg
-        _seed_demo_duckdb(did)
-
-        _save_connections()
+    # Pre-seed the dev-user demo connections (used when auth is disabled)
+    _seed_user_demos("dev-user")
 
 
-def _seed_demo(conn_id: str):
-    live = _open_connection(_connections[conn_id])
-    _live[conn_id] = live
+def _seed_demo(conn_id: str, uid: str = "dev-user"):
+    cfg  = _user_conns(uid)[conn_id]
+    live = _open_connection(cfg)
+    _user_live(uid)[conn_id] = live
     live.executescript("""
     CREATE TABLE IF NOT EXISTS departments (
         id INTEGER PRIMARY KEY, name TEXT NOT NULL, budget REAL
@@ -544,11 +610,11 @@ def _seed_demo(conn_id: str):
     """)
 
 
-def _seed_demo_duckdb(conn_id: str):
+def _seed_demo_duckdb(conn_id: str, uid: str = "dev-user"):
     import duckdb
-    path = _connections[conn_id].get("file", ":memory:")
+    path = _user_conns(uid)[conn_id].get("file", ":memory:")
     live = duckdb.connect(path)
-    _live[conn_id] = live
+    _user_live(uid)[conn_id] = live
     # Analytics-focused demo: e-commerce dataset
     live.execute("""
     CREATE TABLE IF NOT EXISTS products (
@@ -626,46 +692,52 @@ class ConnectionCreate(BaseModel):
 
 
 @app.get("/api/connections")
-async def list_connections():
+async def list_connections(request: Request):
+    uid   = await _get_uid(request)
+    conns = _user_conns(uid)
+    live  = _user_live(uid)
     result = []
-    for cid, cfg in _connections.items():
+    for cid, cfg in conns.items():
         safe = {k: v for k, v in cfg.items() if k != "password"}
-        safe["connected"] = cid in _live
+        safe["connected"] = cid in live
         result.append(safe)
     return result
 
 
 @app.post("/api/connections")
-async def add_connection(req: ConnectionCreate):
-    cid = str(uuid.uuid4())
-    cfg = {"id": cid, **req.dict()}
-    # Test connection
+async def add_connection(request: Request, req: ConnectionCreate):
+    uid   = await _get_uid(request)
+    conns = _user_conns(uid)
+    cid   = str(uuid.uuid4())
+    cfg   = {"id": cid, **req.dict()}
     try:
-        live = _open_connection(cfg)
-        _live[cid] = live
+        conn = _open_connection(cfg)
+        _user_live(uid)[cid] = conn
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Connection failed: {e}")
-    _connections[cid] = cfg
-    _save_connections()
+    conns[cid] = cfg
+    _save_connections(uid)
     return {"id": cid, "name": cfg["name"], "connected": True}
 
 
 @app.post("/api/connections/{conn_id}/test")
-async def test_connection(conn_id: str):
-    cfg = _connections.get(conn_id)
+async def test_connection(request: Request, conn_id: str):
+    uid = await _get_uid(request)
+    cfg = _user_conns(uid).get(conn_id)
     if not cfg:
         raise HTTPException(status_code=404, detail="Connection not found")
     try:
-        live = _open_connection(cfg)
-        _live[conn_id] = live
+        conn = _open_connection(cfg)
+        _user_live(uid)[conn_id] = conn
         return {"ok": True, "message": "Connection successful"}
     except Exception as e:
         return {"ok": False, "message": str(e)}
 
 
 @app.post("/api/connections/{conn_id}/disconnect")
-async def disconnect(conn_id: str):
-    live = _live.pop(conn_id, None)
+async def disconnect(request: Request, conn_id: str):
+    uid  = await _get_uid(request)
+    live = _user_live(uid).pop(conn_id, None)
     if live:
         try: live.close()
         except: pass
@@ -673,37 +745,40 @@ async def disconnect(conn_id: str):
 
 
 @app.delete("/api/connections/{conn_id}")
-async def delete_connection(conn_id: str):
-    live = _live.pop(conn_id, None)
+async def delete_connection(request: Request, conn_id: str):
+    uid  = await _get_uid(request)
+    live = _user_live(uid).pop(conn_id, None)
     if live:
         try: live.close()
         except: pass
-    _connections.pop(conn_id, None)
-    _save_connections()
+    _user_conns(uid).pop(conn_id, None)
+    _save_connections(uid)
     return {"deleted": conn_id}
 
 
 @app.put("/api/connections/{conn_id}")
-async def update_connection(conn_id: str, req: ConnectionCreate):
-    if conn_id not in _connections:
+async def update_connection(request: Request, conn_id: str, req: ConnectionCreate):
+    uid   = await _get_uid(request)
+    conns = _user_conns(uid)
+    if conn_id not in conns:
         raise HTTPException(status_code=404, detail="Not found")
-    # Disconnect old
-    live = _live.pop(conn_id, None)
+    live = _user_live(uid).pop(conn_id, None)
     if live:
         try: live.close()
         except: pass
     cfg = {"id": conn_id, **req.dict()}
-    _connections[conn_id] = cfg
-    _save_connections()
+    conns[conn_id] = cfg
+    _save_connections(uid)
     return {"updated": conn_id}
 
 
 # ── Schema & query endpoints ──────────────────────────────────────────────────
 
 @app.get("/api/connections/{conn_id}/schema")
-async def get_schema(conn_id: str):
+async def get_schema(request: Request, conn_id: str):
+    uid = await _get_uid(request)
     try:
-        return _get_schema(conn_id)
+        return _get_schema(conn_id, uid)
     except HTTPException:
         raise
     except Exception as e:
@@ -714,9 +789,10 @@ class ExecuteRequest(BaseModel):
     sql: str
 
 @app.post("/api/connections/{conn_id}/execute")
-async def execute_sql(conn_id: str, req: ExecuteRequest):
+async def execute_sql(request: Request, conn_id: str, req: ExecuteRequest):
+    uid = await _get_uid(request)
     try:
-        columns, rows = _execute_sql(conn_id, req.sql)
+        columns, rows = _execute_sql(conn_id, req.sql, uid)
         return {"columns": columns, "rows": rows}
     except HTTPException:
         raise
@@ -725,9 +801,10 @@ async def execute_sql(conn_id: str, req: ExecuteRequest):
 
 
 @app.get("/api/connections/{conn_id}/table/{table}/preview")
-async def preview_table(conn_id: str, table: str, limit: int = 100):
+async def preview_table(request: Request, conn_id: str, table: str, limit: int = 100):
+    uid = await _get_uid(request)
     try:
-        cfg = _connections.get(conn_id, {})
+        cfg = _user_conns(uid).get(conn_id, {})
         t   = cfg.get("type", "sqlite")
         if t == "sqlite":
             sql = f"SELECT * FROM [{table}] LIMIT {limit}"
@@ -735,7 +812,7 @@ async def preview_table(conn_id: str, table: str, limit: int = 100):
             sql = f'SELECT * FROM "{table}" LIMIT {limit}'
         else:
             sql = f"SELECT * FROM `{table}` LIMIT {limit}"
-        columns, rows = _execute_sql(conn_id, sql)
+        columns, rows = _execute_sql(conn_id, sql, uid)
         return {"columns": columns, "rows": rows}
     except Exception as e:
         return {"error": str(e)}
@@ -744,7 +821,8 @@ async def preview_table(conn_id: str, table: str, limit: int = 100):
 # ── CSV/JSON upload ───────────────────────────────────────────────────────────
 
 @app.post("/api/connections/{conn_id}/upload")
-async def upload_file(conn_id: str, file: UploadFile = File(...)):
+async def upload_file(request: Request, conn_id: str, file: UploadFile = File(...)):
+    uid   = await _get_uid(request)
     fname = file.filename or "upload"
     try:
         contents = await file.read()
@@ -777,10 +855,10 @@ async def upload_file(conn_id: str, file: UploadFile = File(...)):
 
         col_types = {c: infer_type([r.get(c) for r in rows_data]) for c in fieldnames}
 
-        cfg  = _connections.get(conn_id, {})
+        cfg  = _user_conns(uid).get(conn_id, {})
         t    = cfg.get("type", "sqlite")
-        live = _get_live(conn_id)
-        cur  = live.cursor()
+        live = _get_live(conn_id, uid)
+        cur  = live.cursor() if t != "duckdb" else None
 
         if t == "duckdb":
             live.execute(f'DROP TABLE IF EXISTS "{table_name}"')
@@ -843,18 +921,36 @@ async def ws_query(websocket: WebSocket, conn_id: str):
             await send({"type": "failed", "message": "Empty question"})
             return
 
-        cfg = _connections.get(conn_id)
+        # Auth: token in WS payload (browsers can't set WS headers)
+        uid = "dev-user"
+        if _FIREBASE_PROJECT_ID or os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON"):
+            token = payload.get("token", "")
+            if not token:
+                await send({"type": "failed", "message": "Unauthorized"})
+                return
+            try:
+                decoded = fb_auth.verify_id_token(token)
+                uid = decoded["uid"]
+            except Exception as e:
+                await send({"type": "failed", "message": f"Invalid token: {e}"})
+                return
+
+        cfg = _user_conns(uid).get(conn_id)
         if not cfg:
             await send({"type": "failed", "message": "Connection not found"})
             return
 
+        # Seed demo connections for new users on first query
+        if not _user_conns(uid):
+            _seed_user_demos(uid)
+
         db_type     = cfg.get("type", "sqlite")
         dialect     = _dialect_rules(db_type)
         try:
-            schema_text = _rich_schema_for_llm(conn_id)
+            schema_text = _rich_schema_for_llm(conn_id, uid)
         except Exception:
             # Fallback to simple schema
-            simple = _get_schema(conn_id)
+            simple = _get_schema(conn_id, uid)
             schema_text = "\n".join(
                 f"TABLE {t['table']} (" +
                 ", ".join(f"{c['name']} {c['type']}" for c in t["columns"]) + ")"
@@ -931,7 +1027,7 @@ QUERY WRITING GUIDELINES:
             await send({"type": "executing"})
 
             try:
-                columns, rows = _execute_sql(conn_id, sql)
+                columns, rows = _execute_sql(conn_id, sql, uid)
                 await send({
                     "type": "result", "sql": sql,
                     "columns": columns, "rows": rows, "attempts": attempt,
@@ -953,11 +1049,40 @@ QUERY WRITING GUIDELINES:
             pass
 
 
+# ── Firebase public config (safe to expose) ───────────────────────────────────
+
+@app.get("/api/firebase-config")
+async def firebase_config():
+    """Return public Firebase config for the frontend."""
+    cfg = {
+        "apiKey":            os.environ.get("FIREBASE_API_KEY", ""),
+        "authDomain":        os.environ.get("FIREBASE_AUTH_DOMAIN", ""),
+        "projectId":         os.environ.get("FIREBASE_PROJECT_ID", ""),
+        "storageBucket":     os.environ.get("FIREBASE_STORAGE_BUCKET", ""),
+        "messagingSenderId": os.environ.get("FIREBASE_MESSAGING_SENDER_ID", ""),
+        "appId":             os.environ.get("FIREBASE_APP_ID", ""),
+    }
+    # Only return config if Firebase is actually configured
+    if not cfg["projectId"]:
+        return {}
+    return cfg
+
+
+# ── First-login bootstrap ─────────────────────────────────────────────────────
+
+@app.post("/api/bootstrap")
+async def bootstrap(request: Request):
+    """Called once after login — seeds demo connections for new users."""
+    uid = await _get_uid(request)
+    _seed_user_demos(uid)
+    return {"uid": uid, "connections": len(_user_conns(uid))}
+
+
 # ── Health check (for deployment platforms) ───────────────────────────────────
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "connections": len(_connections)}
+    return {"status": "ok", "users": len(_connections)}
 
 
 # ── Serve frontend ────────────────────────────────────────────────────────────

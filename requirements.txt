@@ -5,3 +5,4 @@ python-multipart>=0.0.9
 psycopg2-binary>=2.9.0
 pymysql>=1.1.0
 duckdb>=1.0.0
+firebase-admin>=6.0.0
