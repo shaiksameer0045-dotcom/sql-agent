@@ -471,12 +471,13 @@
         <label>Database Type</label>
         <select id="f-type" onchange="onTypeChange()">
           <option value="sqlite">SQLite</option>
+          <option value="duckdb">DuckDB</option>
           <option value="postgresql">PostgreSQL</option>
           <option value="mysql">MySQL / MariaDB</option>
         </select>
       </div>
       <div id="sqlite-fields" class="field-group">
-        <label>File Path</label>
+        <label id="f-file-label">File Path</label>
         <input id="f-file" type="text" placeholder="/path/to/db.sqlite  or  :memory:" />
       </div>
       <div id="net-fields" style="display:none;display:flex;flex-direction:column;gap:12px;">
@@ -1072,8 +1073,16 @@ function closeConnModal() { document.getElementById('conn-modal').classList.remo
 
 function onTypeChange() {
   const t = document.getElementById('f-type').value;
-  document.getElementById('sqlite-fields').style.display = t === 'sqlite' ? 'flex' : 'none';
-  document.getElementById('net-fields').style.display = t !== 'sqlite' ? 'flex' : 'none';
+  const isFile = t === 'sqlite' || t === 'duckdb';
+  document.getElementById('sqlite-fields').style.display = isFile ? 'flex' : 'none';
+  document.getElementById('net-fields').style.display = !isFile ? 'flex' : 'none';
+  if (t === 'duckdb') {
+    document.getElementById('f-file-label').textContent = 'File Path';
+    document.getElementById('f-file').placeholder = '/path/to/db.duckdb  or  :memory:';
+  } else {
+    document.getElementById('f-file-label').textContent = 'File Path';
+    document.getElementById('f-file').placeholder = '/path/to/db.sqlite  or  :memory:';
+  }
   if (t === 'postgresql' && !document.getElementById('f-port').value) document.getElementById('f-port').value = '5432';
   if (t === 'mysql' && !document.getElementById('f-port').value) document.getElementById('f-port').value = '3306';
 }
@@ -1081,7 +1090,7 @@ function onTypeChange() {
 function getFormData() {
   const t = document.getElementById('f-type').value;
   const d = { name: document.getElementById('f-name').value.trim() || 'Untitled', type: t, color: selectedColor };
-  if (t === 'sqlite') {
+  if (t === 'sqlite' || t === 'duckdb') {
     d.file = document.getElementById('f-file').value.trim() || ':memory:';
   } else {
     d.host = document.getElementById('f-host').value.trim() || 'localhost';

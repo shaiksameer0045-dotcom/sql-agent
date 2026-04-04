@@ -44,13 +44,17 @@ _live: dict[str, Any] = {}           # id → live db connection object
 # ── Driver helpers ────────────────────────────────────────────────────────────
 
 def _open_connection(cfg: dict):
-    """Open and return a raw DB-API2 connection for the given config."""
+    """Open and return a DB connection for the given config."""
     t = cfg["type"]
     if t == "sqlite":
         path = cfg.get("file", ":memory:")
         conn = sqlite3.connect(path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         return conn
+    elif t == "duckdb":
+        import duckdb
+        path = cfg.get("file", ":memory:")
+        return duckdb.connect(path)
     elif t == "postgresql":
         import psycopg2
         return psycopg2.connect(
@@ -91,6 +95,8 @@ def _get_live(conn_id: str):
             cur = live.cursor()
             if t == "sqlite":
                 cur.execute("SELECT 1")
+            elif t == "duckdb":
+                live.execute("SELECT 1")
             elif t == "postgresql":
                 cur.execute("SELECT 1")
                 live.rollback()
@@ -124,6 +130,15 @@ def _get_schema(conn_id: str) -> list[dict]:
             cols = [{"name": c[1], "type": c[2] or "TEXT"} for c in cur.fetchall()]
             cur.execute(f"SELECT COUNT(*) FROM [{tbl}]")
             row_count = cur.fetchone()[0]
+            result.append({"table": tbl, "columns": cols, "row_count": row_count})
+
+    elif t == "duckdb":
+        rows = live.execute("SHOW TABLES").fetchall()
+        tables = [r[0] for r in rows]
+        for tbl in tables:
+            info = live.execute(f"PRAGMA table_info('{tbl}')").fetchall()
+            cols = [{"name": r[1], "type": r[2] or "VARCHAR"} for r in info]
+            row_count = live.execute(f'SELECT COUNT(*) FROM "{tbl}"').fetchone()[0]
             result.append({"table": tbl, "columns": cols, "row_count": row_count})
 
     elif t == "postgresql":
@@ -194,7 +209,19 @@ def _execute_sql(conn_id: str, sql: str) -> tuple[list[str], list[list]]:
     live = _get_live(conn_id)
     cfg  = _connections[conn_id]
     t    = cfg["type"]
-    cur  = live.cursor()
+
+    # DuckDB has its own API (not DB-API2 cursor model)
+    if t == "duckdb":
+        rel = live.execute(sql)
+        if rel.description:
+            columns = [d[0] for d in rel.description]
+            rows = [[_coerce(v) for v in row] for row in rel.fetchall()]
+        else:
+            columns = ["affected_rows"]
+            rows = [[-1]]
+        return columns, rows
+
+    cur = live.cursor()
     cur.execute(sql)
 
     if cur.description:
@@ -229,7 +256,19 @@ def _rich_schema_for_llm(conn_id: str) -> str:
     parts = []
 
     # ── Fetch table list + columns + PKs ────────────────────────────────────
-    if t == "sqlite":
+    if t == "duckdb":
+        tbl_names = [r[0] for r in live.execute("SHOW TABLES").fetchall()]
+        tables = []
+        for tbl in tbl_names:
+            info = live.execute(f"PRAGMA table_info('{tbl}')").fetchall()
+            # (cid, name, type, notnull, dflt, pk)
+            cols = [{"name": r[1], "type": r[2] or "VARCHAR", "pk": bool(r[5])} for r in info]
+            count = live.execute(f'SELECT COUNT(*) FROM "{tbl}"').fetchone()[0]
+            samples = [[_coerce(v) for v in row]
+                       for row in live.execute(f'SELECT * FROM "{tbl}" LIMIT 3').fetchall()]
+            tables.append({"table": tbl, "columns": cols, "row_count": count, "samples": samples})
+
+    elif t == "sqlite":
         cur.execute(
             "SELECT name FROM sqlite_master WHERE type='table' "
             "AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -349,7 +388,23 @@ def _rich_schema_for_llm(conn_id: str) -> str:
 
 
 def _dialect_rules(db_type: str) -> str:
-    if db_type == "sqlite":
+    if db_type == "duckdb":
+        return """\
+DUCKDB-SPECIFIC RULES (DuckDB is an analytical database with PostgreSQL-like SQL):
+- Quote identifiers with double quotes: "column_name", "table_name"
+- Rich type system: INTEGER, BIGINT, DOUBLE, VARCHAR, BOOLEAN, DATE, TIMESTAMP, LIST, STRUCT
+- Excellent for analytics: window functions, QUALIFY, PIVOT, UNPIVOT fully supported
+- Date functions: NOW(), CURRENT_DATE, DATE_TRUNC('month', col), date_diff('day', d1, d2)
+- String: LOWER(), UPPER(), TRIM(), SPLIT_PART(), REGEXP_MATCHES()
+- DuckDB can directly query CSV/Parquet: SELECT * FROM read_csv_auto('file.csv')
+- Array functions: list_aggregate(), array_agg(), unnest()
+- Sampling: SELECT * FROM tbl USING SAMPLE 10%
+- Use LIMIT for top-N queries
+- String concat: col1 || ' ' || col2
+- SIMILAR TO or ~ for regex matching
+- Do NOT use backtick quotes"""
+
+    elif db_type == "sqlite":
         return """\
 SQLITE-SPECIFIC RULES:
 - Use single quotes for strings, double quotes for identifiers
@@ -427,16 +482,27 @@ app.add_middleware(
 async def startup():
     Path("static").mkdir(exist_ok=True)
     _load_connections()
-    # Seed a default SQLite connection if none exist
+    # Seed demo connections if none exist
     if not _connections:
+        # SQLite demo
         cid = str(uuid.uuid4())
         cfg = {
             "id": cid, "name": "Demo SQLite", "type": "sqlite",
             "file": str(DATA_DIR / "demo.db"), "color": "#7c5cfc",
         }
         _connections[cid] = cfg
-        _save_connections()
         _seed_demo(cid)
+
+        # DuckDB demo
+        did = str(uuid.uuid4())
+        dcfg = {
+            "id": did, "name": "Demo DuckDB", "type": "duckdb",
+            "file": str(DATA_DIR / "demo.duckdb"), "color": "#f9e2af",
+        }
+        _connections[did] = dcfg
+        _seed_demo_duckdb(did)
+
+        _save_connections()
 
 
 def _seed_demo(conn_id: str):
@@ -476,6 +542,73 @@ def _seed_demo(conn_id: str):
         (7,8,7500,'2024-03-05','Pro License'),
         (8,4,11000,'2024-03-10','Enterprise License');
     """)
+
+
+def _seed_demo_duckdb(conn_id: str):
+    import duckdb
+    path = _connections[conn_id].get("file", ":memory:")
+    live = duckdb.connect(path)
+    _live[conn_id] = live
+    # Analytics-focused demo: e-commerce dataset
+    live.execute("""
+    CREATE TABLE IF NOT EXISTS products (
+        product_id INTEGER PRIMARY KEY,
+        name VARCHAR, category VARCHAR,
+        price DOUBLE, cost DOUBLE, launch_date DATE
+    )""")
+    live.execute("""
+    CREATE TABLE IF NOT EXISTS customers (
+        customer_id INTEGER PRIMARY KEY,
+        name VARCHAR, country VARCHAR,
+        segment VARCHAR, joined_date DATE
+    )""")
+    live.execute("""
+    CREATE TABLE IF NOT EXISTS orders (
+        order_id INTEGER PRIMARY KEY,
+        customer_id INTEGER, product_id INTEGER,
+        quantity INTEGER, unit_price DOUBLE,
+        order_date DATE, status VARCHAR
+    )""")
+    # Check if already seeded
+    if live.execute("SELECT COUNT(*) FROM products").fetchone()[0] > 0:
+        return
+    live.executemany("INSERT INTO products VALUES (?,?,?,?,?,?)", [
+        (1,'Laptop Pro 16','Electronics',1299.99,700.00,'2023-01-15'),
+        (2,'Wireless Keyboard','Electronics',89.99,30.00,'2023-02-01'),
+        (3,'Standing Desk','Furniture',649.00,280.00,'2023-01-20'),
+        (4,'Ergonomic Chair','Furniture',449.00,190.00,'2022-11-10'),
+        (5,'USB-C Hub','Electronics',59.99,18.00,'2023-03-05'),
+        (6,'Monitor 4K 27"','Electronics',799.00,420.00,'2023-04-01'),
+        (7,'Bookshelf','Furniture',199.00,80.00,'2023-02-15'),
+        (8,'Webcam HD','Electronics',129.99,45.00,'2023-05-01'),
+    ])
+    live.executemany("INSERT INTO customers VALUES (?,?,?,?,?)", [
+        (1,'Alice Chen','USA','Enterprise','2022-03-10'),
+        (2,'Bob Kumar','India','SMB','2022-07-22'),
+        (3,'Carol Singh','UK','Enterprise','2021-11-05'),
+        (4,'Dave Patel','Canada','Consumer','2023-01-18'),
+        (5,'Eve Sharma','Australia','SMB','2022-09-30'),
+        (6,'Frank Ali','Germany','Enterprise','2021-06-14'),
+        (7,'Grace Lee','Singapore','Consumer','2023-02-28'),
+        (8,'Henry Wu','Japan','SMB','2022-12-01'),
+    ])
+    live.executemany("INSERT INTO orders VALUES (?,?,?,?,?,?,?)", [
+        (1,1,1,2,1299.99,'2024-01-05','delivered'),
+        (2,2,2,3,89.99,'2024-01-10','delivered'),
+        (3,3,3,1,649.00,'2024-01-12','delivered'),
+        (4,4,6,1,799.00,'2024-01-20','delivered'),
+        (5,5,1,1,1299.99,'2024-02-01','delivered'),
+        (6,6,4,2,449.00,'2024-02-03','delivered'),
+        (7,1,5,5,59.99,'2024-02-10','shipped'),
+        (8,7,8,1,129.99,'2024-02-15','shipped'),
+        (9,2,6,1,799.00,'2024-02-20','processing'),
+        (10,8,3,1,649.00,'2024-03-01','processing'),
+        (11,3,1,1,1299.99,'2024-03-05','processing'),
+        (12,4,2,2,89.99,'2024-03-10','processing'),
+        (13,5,7,1,199.00,'2024-03-12','processing'),
+        (14,6,8,2,129.99,'2024-03-15','processing'),
+        (15,1,4,1,449.00,'2024-03-20','processing'),
+    ])
 
 
 # ── Connection endpoints ──────────────────────────────────────────────────────
@@ -598,7 +731,7 @@ async def preview_table(conn_id: str, table: str, limit: int = 100):
         t   = cfg.get("type", "sqlite")
         if t == "sqlite":
             sql = f"SELECT * FROM [{table}] LIMIT {limit}"
-        elif t == "postgresql":
+        elif t in ("postgresql", "duckdb"):
             sql = f'SELECT * FROM "{table}" LIMIT {limit}'
         else:
             sql = f"SELECT * FROM `{table}` LIMIT {limit}"
@@ -649,7 +782,18 @@ async def upload_file(conn_id: str, file: UploadFile = File(...)):
         live = _get_live(conn_id)
         cur  = live.cursor()
 
-        if t == "sqlite":
+        if t == "duckdb":
+            live.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+            col_defs = ", ".join(f'"{c}" VARCHAR' for c in fieldnames)
+            live.execute(f'CREATE TABLE "{table_name}" ({col_defs})')
+            for row in rows_data:
+                vals = [row.get(c) for c in fieldnames]
+                placeholders = ",".join("?" for _ in fieldnames)
+                cols_q = ",".join(f'"{c}"' for c in fieldnames)
+                live.execute(f'INSERT INTO "{table_name}" ({cols_q}) VALUES ({placeholders})', vals)
+            live.commit()
+            return {"table": table_name, "rows": len(rows_data), "columns": fieldnames}
+        elif t == "sqlite":
             cur.execute(f"DROP TABLE IF EXISTS [{table_name}]")
             col_defs = ", ".join(f'[{c}] {col_types[c]}' for c in fieldnames)
             cur.execute(f"CREATE TABLE [{table_name}] ({col_defs})")

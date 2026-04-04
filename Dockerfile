@@ -11,10 +11,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Persistent data lives here (mount a volume to /data in production)
+# Persistent data volume (SQLite + DuckDB files, connections.json)
 ENV DATA_DIR=/data
 RUN mkdir -p /data
 
 EXPOSE 8000
 
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# PORT env var is set by Railway; fallback to 8000 locally
+CMD uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1
