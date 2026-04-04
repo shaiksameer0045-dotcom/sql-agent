@@ -40,17 +40,26 @@ import firebase_admin
 from firebase_admin import auth as fb_auth, credentials as fb_creds
 
 _FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "")
+_FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+_FIREBASE_SERVICE_ACCOUNT_PATH = os.environ.get("FIREBASE_SERVICE_ACCOUNT_PATH", "")
+
+
+def _firebase_enabled() -> bool:
+    return bool(
+        _FIREBASE_PROJECT_ID
+        or _FIREBASE_SERVICE_ACCOUNT_JSON
+        or _FIREBASE_SERVICE_ACCOUNT_PATH
+    )
+
 
 def _init_firebase():
     if firebase_admin._apps:
         return
-    sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
-    if sa_json:
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write(sa_json)
-            tmp = f.name
-        cred = fb_creds.Certificate(tmp)
+    if _FIREBASE_SERVICE_ACCOUNT_JSON:
+        cred = fb_creds.Certificate(json.loads(_FIREBASE_SERVICE_ACCOUNT_JSON))
+        firebase_admin.initialize_app(cred)
+    elif _FIREBASE_SERVICE_ACCOUNT_PATH:
+        cred = fb_creds.Certificate(_FIREBASE_SERVICE_ACCOUNT_PATH)
         firebase_admin.initialize_app(cred)
     elif _FIREBASE_PROJECT_ID:
         # Minimal init — only needs project ID to verify tokens
@@ -62,7 +71,7 @@ _init_firebase()
 
 async def _get_uid(request: Request) -> str:
     """Extract and verify Firebase ID token → return uid. Raises 401 on failure."""
-    if not _FIREBASE_PROJECT_ID and not os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON"):
+    if not _firebase_enabled():
         # Auth disabled (local dev) — use a fixed dev uid
         return "dev-user"
     auth_header = request.headers.get("Authorization", "")
@@ -923,7 +932,7 @@ async def ws_query(websocket: WebSocket, conn_id: str):
 
         # Auth: token in WS payload (browsers can't set WS headers)
         uid = "dev-user"
-        if _FIREBASE_PROJECT_ID or os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON"):
+        if _firebase_enabled():
             token = payload.get("token", "")
             if not token:
                 await send({"type": "failed", "message": "Unauthorized"})
@@ -1090,3 +1099,8 @@ async def health():
 @app.get("/")
 async def serve_index():
     return FileResponse("static/index.html")
+
+
+@app.get("/firebase-config.js")
+async def serve_firebase_config():
+    return FileResponse("static/firebase-config.js", media_type="application/javascript")

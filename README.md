@@ -1,201 +1,214 @@
 # Self-Healing SQL Agent
 
-A natural language SQL interface powered by Claude. Ask questions in plain English — if the generated SQL fails, the agent automatically fixes it and retries.
+A FastAPI + vanilla JS SQL agent that connects to SQLite, DuckDB, PostgreSQL, and MySQL, generates SQL from natural language, and retries automatically when a query fails.
 
----
+This repo is now set up for:
 
-## How It Works
+- Firebase Authentication on the frontend
+- Railway-first deployment for the full app
+- Optional Firebase Hosting or Cloud Run deployment if you want to split frontend/backend later
 
-```
-User question
-     │
-     ▼
-Claude generates SQL
-     │
-     ▼
-Execute against SQLite
-     │
-   ┌─┴──────────────────┐
-   │ Error?              │
-   │ Yes → feed error    │
-   │       back to Claude│
-   │       (up to 3x)    │
-   └─────────────────────┘
-     │ Success
-     ▼
-Return results
-```
+## Stack
 
-Each healing attempt feeds the **original question + failing SQL + error message** back to Claude so it can self-correct.
+- Frontend: static HTML/CSS/JS in [`static/index.html`](/Users/shaiksameer/Documents/self-healing-sql-agent/static/index.html)
+- Auth: Firebase Auth (Google and email/password)
+- Backend: FastAPI + Uvicorn in [`server.py`](/Users/shaiksameer/Documents/self-healing-sql-agent/server.py)
+- AI: Groq via `llama-3.3-70b-versatile`
+- Deployment: Railway for the full app, or Cloud Run/Firebase Hosting if you want to split services
 
----
+## Local Development
 
-## Quick Start
-
-### 1. Prerequisites
-
-- Python 3.11+
-- An Anthropic API key → [console.anthropic.com](https://console.anthropic.com)
-
-### 2. Install dependencies
+### 1. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Set your API key
+### 2. Create env vars
+
+Copy [`.env.example`](/Users/shaiksameer/Documents/self-healing-sql-agent/.env.example) into `.env` and fill in what you need.
+
+Minimum for local backend work:
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+GROQ_API_KEY=your_groq_api_key
 ```
 
-### 4. Run the web app
+If you want Firebase auth enabled locally, also set:
+
+```bash
+FIREBASE_PROJECT_ID=your-firebase-project-id
+FIREBASE_SERVICE_ACCOUNT_PATH=/absolute/path/to/service-account.json
+FIREBASE_API_KEY=your_web_api_key
+FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+FIREBASE_STORAGE_BUCKET=your-project.firebasestorage.app
+FIREBASE_MESSAGING_SENDER_ID=1234567890
+FIREBASE_APP_ID=1:1234567890:web:abcdef123456
+```
+
+### 3. Run the backend
 
 ```bash
 uvicorn server:app --reload
 ```
 
-Open **http://localhost:8000** in your browser.
+Open [http://localhost:8000](http://localhost:8000).
 
-### 5. (Optional) Run the CLI instead
+If Firebase config is not set, the app falls back to a local dev mode and skips auth.
 
-```bash
-python main.py
-```
+## Recommended Deployment: Railway
 
----
+Railway is the simplest production path for this project because the same FastAPI app can serve:
 
-## Project Structure
+- the frontend from [`static/index.html`](/Users/shaiksameer/Documents/self-healing-sql-agent/static/index.html)
+- the REST API
+- the WebSocket endpoint
 
-```
-self-healing-sql-agent/
-├── server.py          # FastAPI web server (WebSocket + REST API)
-├── main.py            # Interactive CLI
-├── agent.py           # Core self-healing loop (used by CLI)
-├── database.py        # SQLite helpers (used by CLI)
-├── requirements.txt   # Python dependencies
-├── static/
-│   └── index.html     # Single-page frontend (all CSS + JS inline)
-├── data.db            # Web app database (auto-created)
-└── sample.db          # CLI database (auto-created)
-```
+That means you do not need Firebase Hosting for deployment. You only use Firebase for authentication.
 
----
+### Railway setup
 
-## Web UI Features
-
-### Natural Language Queries
-Type any question about your data. The agent streams the SQL generation live and shows each healing attempt in real time.
-
-### Raw SQL Mode
-Switch to the **Raw SQL** tab to run queries directly without AI — useful for verifying data or running custom queries.
-
-### Schema Explorer (sidebar)
-- Expand any table to see its columns and types
-- Click a table name to preview the first 10 rows
-- Delete tables with the trash icon
-
-### CSV Upload
-Drag and drop a `.csv` file onto the sidebar upload zone to create a new table instantly. Column types are inferred automatically.
-
-### Query History
-Your last 10 questions are saved in the browser (localStorage) and shown in the sidebar.
-
----
-
-## REST API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/schema` | List all tables with columns and row counts |
-| `POST` | `/api/execute` | Run raw SQL → `{columns, rows}` |
-| `POST` | `/api/upload` | Upload a CSV file to create a table |
-| `DELETE` | `/api/table/{name}` | Drop a table |
-| `WS` | `/ws/query` | Streaming self-healing query |
-
-### WebSocket Event Protocol
-
-**Client sends:**
-```json
-{ "question": "Which department has the highest average salary?" }
-```
-
-**Server streams (in order):**
-```json
-{ "type": "attempt_start", "attempt": 1, "max_retries": 3, "healing": false }
-{ "type": "sql_chunk", "text": "SELECT " }
-{ "type": "sql_chunk", "text": "d.name, AVG(e.salary)..." }
-{ "type": "sql_complete", "sql": "SELECT d.name, AVG(e.salary) as avg FROM ..." }
-{ "type": "executing" }
-{ "type": "result", "columns": ["name","avg"], "rows": [...], "attempts": 1 }
-```
-
-If SQL fails and healing kicks in:
-```json
-{ "type": "sql_error", "message": "no such table: employes", "attempt": 1 }
-{ "type": "attempt_start", "attempt": 2, "max_retries": 3, "healing": true }
-...
-{ "type": "result", ..., "attempts": 2 }
-```
-
-On total failure (all retries exhausted):
-```json
-{ "type": "failed", "message": "Failed after 3 attempts. Last error: ..." }
-```
-
-### POST /api/execute
+1. Push this repo to GitHub.
+2. In Railway, create a new project from that GitHub repo.
+3. Railway will detect [`railway.toml`](/Users/shaiksameer/Documents/self-healing-sql-agent/railway.toml) and [`Dockerfile`](/Users/shaiksameer/Documents/self-healing-sql-agent/Dockerfile).
+4. Add these Railway environment variables:
 
 ```bash
-curl -X POST http://localhost:8000/api/execute \
-  -H "Content-Type: application/json" \
-  -d '{"sql": "SELECT name, salary FROM employees ORDER BY salary DESC"}'
+GROQ_API_KEY=your_groq_api_key
+FIREBASE_PROJECT_ID=sql-agent-5b660
+FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+FIREBASE_API_KEY=AIzaSyCFk409Xzi93Fv9gWSuBj0ZXt99rO-0sJY
+FIREBASE_AUTH_DOMAIN=sql-agent-5b660.firebaseapp.com
+FIREBASE_STORAGE_BUCKET=sql-agent-5b660.firebasestorage.app
+FIREBASE_MESSAGING_SENDER_ID=1030798533018
+FIREBASE_APP_ID=1:1030798533018:web:de634384b6bda613ec1a23
+DATA_DIR=/data
 ```
 
-### POST /api/upload
+5. If you want SQLite or DuckDB files to persist, attach a Railway volume mounted at `/data`.
+6. Deploy.
+
+### Railway notes
+
+- [`static/firebase-config.js`](/Users/shaiksameer/Documents/self-healing-sql-agent/static/firebase-config.js) intentionally leaves `apiBaseUrl` and `wsBaseUrl` empty so the frontend uses the same Railway domain as the backend.
+- For Railway, prefer `FIREBASE_SERVICE_ACCOUNT_JSON` instead of `FIREBASE_SERVICE_ACCOUNT_PATH` because Railway secrets are easier to manage as environment variables than as files.
+- If you plan to connect to Redshift or other external databases, the outbound network path is decided by Railway, not Firebase.
+
+## Firebase Authentication Setup
+
+Use the official Firebase console flow:
+
+1. Create a Firebase project.
+2. Add a Web app to that project.
+3. In Authentication, enable:
+   - Google
+   - Email/Password
+4. Copy the web app config values into either:
+   - `.env` for same-origin local/backend serving, or
+   - [`static/firebase-config.js`](/Users/shaiksameer/Documents/self-healing-sql-agent/static/firebase-config.js) for Firebase Hosting
+
+The frontend uses Firebase Auth on the client and sends the Firebase ID token to the backend. The backend verifies that token with `firebase-admin`.
+
+Official docs used:
+
+- [Firebase Auth: Google sign-in](https://firebase.google.com/docs/auth/web/google-signin)
+- [Firebase Auth: email/password](https://firebase.google.com/docs/auth/web/password-auth)
+
+## Deployment Architecture
+
+Firebase Hosting is a good fit for the static frontend, but this app also needs:
+
+- Python execution
+- database drivers
+- REST endpoints
+- WebSockets
+
+Because of that, the clean setup is:
+
+1. Deploy the frontend from `static/` to Firebase Hosting.
+2. Deploy the FastAPI backend separately, typically to Cloud Run.
+3. Point the frontend at that backend using [`static/firebase-config.js`](/Users/shaiksameer/Documents/self-healing-sql-agent/static/firebase-config.js).
+
+## Optional: Frontend Deployment With Firebase Hosting
+
+[`firebase.json`](/Users/shaiksameer/Documents/self-healing-sql-agent/firebase.json) is already included and publishes the `static/` directory.
+
+Update [`static/firebase-config.js`](/Users/shaiksameer/Documents/self-healing-sql-agent/static/firebase-config.js):
+
+```js
+window.APP_CONFIG = {
+  firebase: {
+    apiKey: "your_web_api_key",
+    authDomain: "your-project.firebaseapp.com",
+    projectId: "your-project-id",
+    storageBucket: "your-project.firebasestorage.app",
+    messagingSenderId: "1234567890",
+    appId: "1:1234567890:web:abcdef123456",
+  },
+  apiBaseUrl: "https://your-backend-service.run.app",
+  wsBaseUrl: "https://your-backend-service.run.app",
+};
+```
+
+Then deploy:
 
 ```bash
-curl -X POST http://localhost:8000/api/upload \
-  -F "file=@mydata.csv"
+npm install -g firebase-tools
+firebase login
+firebase use <your-firebase-project-id>
+firebase deploy --only hosting
 ```
 
----
+Or use the helper script after your backend is live:
 
-## Demo Data
+```bash
+BACKEND_URL=https://your-backend-service.run.app ./scripts/deploy_frontend.sh
+```
 
-The app seeds a sample business database on startup:
+## Optional: Backend Deployment With Cloud Run
 
-**departments** (4 rows) — Engineering, Sales, Marketing, HR  
-**employees** (8 rows) — names, salaries, hire dates, roles  
-**sales** (8 rows) — amounts, dates, products per employee
+The repo already includes a [`Dockerfile`](/Users/shaiksameer/Documents/self-healing-sql-agent/Dockerfile), so Cloud Run is a straightforward option.
 
-### Example questions to try
+Example:
 
-- *Show all employees with their department names and salaries*
-- *Which department has the highest average salary?*
-- *What is the total sales revenue per employee?*
-- *List employees hired after 2021, sorted by salary descending*
-- *What is the monthly sales total for Q1 2024?*
-- *Who are the top 3 salespeople by total revenue?*
+```bash
+gcloud run deploy sql-agent-api \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --set-env-vars GROQ_API_KEY=... \
+  --set-env-vars FIREBASE_PROJECT_ID=your-firebase-project-id
+```
 
----
+Or use the helper script:
 
-## Configuration
+```bash
+GROQ_API_KEY=your_groq_api_key ./scripts/deploy_backend.sh
+```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | — | **Required.** Your Anthropic API key |
-| `DB_PATH` (in server.py) | `data.db` | SQLite database file path |
-| `MAX_RETRIES` (in server.py) | `3` | Max healing attempts per query |
-| `MODEL` (in server.py) | `claude-opus-4-6` | Claude model to use |
+For non-Google environments, also provide either:
 
----
+- `FIREBASE_SERVICE_ACCOUNT_PATH`
+- `FIREBASE_SERVICE_ACCOUNT_JSON`
 
-## Tech Stack
+If you deploy on Google Cloud, `FIREBASE_PROJECT_ID` is usually enough for token verification as long as the service can access Google credentials.
 
-| Layer | Technology |
-|-------|------------|
-| AI | Claude (`claude-opus-4-6`) via Anthropic Python SDK |
-| Backend | FastAPI + Uvicorn |
-| Database | SQLite (built into Python) |
-| Frontend | Vanilla HTML/CSS/JS + highlight.js |
-| Streaming | WebSockets (FastAPI + asyncio) |
+## Important Files
+
+- [`server.py`](/Users/shaiksameer/Documents/self-healing-sql-agent/server.py): FastAPI API, WebSocket query streaming, Firebase token verification
+- [`static/index.html`](/Users/shaiksameer/Documents/self-healing-sql-agent/static/index.html): app UI and Firebase Auth client flow
+- [`static/firebase-config.js`](/Users/shaiksameer/Documents/self-healing-sql-agent/static/firebase-config.js): frontend Firebase + backend endpoint config
+- [`railway.toml`](/Users/shaiksameer/Documents/self-healing-sql-agent/railway.toml): Railway deployment config
+- [`Dockerfile`](/Users/shaiksameer/Documents/self-healing-sql-agent/Dockerfile): container used by Railway and Cloud Run
+- [`firebase.json`](/Users/shaiksameer/Documents/self-healing-sql-agent/firebase.json): Firebase Hosting config
+- [`scripts/deploy_backend.sh`](/Users/shaiksameer/Documents/self-healing-sql-agent/scripts/deploy_backend.sh): deploy the FastAPI backend to Cloud Run
+- [`scripts/deploy_frontend.sh`](/Users/shaiksameer/Documents/self-healing-sql-agent/scripts/deploy_frontend.sh): update frontend backend URLs and deploy Firebase Hosting
+- [`.env.example`](/Users/shaiksameer/Documents/self-healing-sql-agent/.env.example): backend env template
+
+## Verification
+
+The Python files compile successfully with:
+
+```bash
+python3 -m py_compile server.py main.py agent.py database.py
+```

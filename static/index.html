@@ -7,6 +7,7 @@
 <!-- Firebase SDK -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="/firebase-config.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overflow: hidden; }
@@ -1324,12 +1325,40 @@ function esc(s) {
 switchTab('nl');
 
 // ── Firebase Auth ───────────────────────────────────────────────────────────
-// Config is injected server-side or set via window.FIREBASE_CONFIG
-// When FIREBASE_PROJECT_ID is not set, auth is bypassed (dev mode)
+// Config can come from static/firebase-config.js or the backend fallback endpoint.
 let _fbApp = null;
 let _fbAuth = null;
 let _currentUser = null;
 let _authMode = 'signin'; // 'signin' | 'signup'
+const _rawFetch = window.fetch.bind(window);
+
+function normalizeBaseUrl(url) {
+  return (url || '').trim().replace(/\/+$/, '');
+}
+
+function apiBaseUrl() {
+  return normalizeBaseUrl(window.APP_CONFIG?.apiBaseUrl || window.API_BASE_URL || '');
+}
+
+function apiUrl(path) {
+  const base = apiBaseUrl();
+  return base ? `${base}${path}` : path;
+}
+
+function wsUrl(path) {
+  const explicitBase = normalizeBaseUrl(window.APP_CONFIG?.wsBaseUrl || window.WS_BASE_URL || apiBaseUrl());
+  if (explicitBase) {
+    const parsed = new URL(explicitBase);
+    const protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${parsed.host}${path}`;
+  }
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${location.host}${path}`;
+}
+
+function firebaseConfig() {
+  return window.APP_CONFIG?.firebase || window.FIREBASE_CONFIG || {};
+}
 
 async function getIdToken() {
   if (!_fbAuth || !_currentUser) return null;
@@ -1344,14 +1373,15 @@ async function authHeaders() {
 
 async function authFetch(url, opts = {}) {
   const headers = { ...(opts.headers || {}), ...(await authHeaders()) };
-  return fetch(url, { ...opts, headers });
+  return _rawFetch(apiUrl(url), { ...opts, headers });
 }
 
 function initFirebase() {
-  const cfg = window.FIREBASE_CONFIG;
+  const cfg = firebaseConfig();
   if (!cfg || !cfg.projectId) {
     // No Firebase — dev mode, skip auth screen
     document.getElementById('auth-screen').classList.remove('visible');
+    loadConnections();
     return;
   }
   _fbApp  = firebase.initializeApp(cfg);
@@ -1479,8 +1509,7 @@ submitNL = async function() {
   panel.innerHTML = '';
 
   const token = await getIdToken();
-  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${wsProto}//${location.host}/ws/query/${activeConnId}`);
+  const ws = new WebSocket(wsUrl(`/ws/query/${activeConnId}`));
   let currentCard = null, currentSqlEl = null;
 
   ws.onopen = () => ws.send(JSON.stringify({ question: q, token: token || '' }));
@@ -1568,30 +1597,25 @@ submitNL = async function() {
 };
 
 // Patch all other fetch calls to inject auth headers
-const _patchFetch = (fn) => async (...args) => {
-  // args[1] might be opts with method/body
-  const opts = args[1] || {};
-  const headers = { ...(opts.headers || {}), ...(await authHeaders()) };
-  args[1] = { ...opts, headers };
-  return fn(...args);
-};
-// Wrap internal fetch calls
-const _rawFetch = window.fetch.bind(window);
 window.fetch = async (url, opts = {}) => {
   if (typeof url === 'string' && url.startsWith('/api/')) {
     const headers = { ...(opts.headers || {}), ...(await authHeaders()) };
-    return _rawFetch(url, { ...opts, headers });
+    return _rawFetch(apiUrl(url), { ...opts, headers });
   }
   return _rawFetch(url, opts);
 };
 
-// Fetch Firebase config from server then init
+// Load backend config as a fallback for local same-origin deployments.
 document.addEventListener('DOMContentLoaded', async () => {
   appBoot();
   try {
-    const r = await fetch('/api/firebase-config');
-    window.FIREBASE_CONFIG = await r.json();
-  } catch { window.FIREBASE_CONFIG = {}; }
+    if (!firebaseConfig().projectId) {
+      const r = await _rawFetch(apiUrl('/api/firebase-config'));
+      window.FIREBASE_CONFIG = await r.json();
+    }
+  } catch {
+    window.FIREBASE_CONFIG = window.FIREBASE_CONFIG || {};
+  }
   initFirebase();
 });
 </script>
