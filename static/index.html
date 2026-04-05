@@ -452,6 +452,9 @@
       <div class="auth-toggle" id="auth-toggle">
         No account? <span onclick="toggleAuthMode()">Create one</span>
       </div>
+      <div style="text-align:center;margin-top:2px;">
+        <span onclick="sendPasswordReset()" style="font-size:12px;color:#6c7086;cursor:pointer;text-decoration:underline;">Forgot password?</span>
+      </div>
     </div>
   </div>
 </div>
@@ -1496,8 +1499,28 @@ async function signInGoogle() {
   }
 }
 
+function _friendlyAuthError(e) {
+  const code = e.code || '';
+  if (code === 'auth/user-not-found' || code === 'auth/invalid-credential' || code === 'auth/invalid-email')
+    return 'No account found with that email. Click "Create one" below to sign up.';
+  if (code === 'auth/wrong-password')
+    return 'Incorrect password. Try again or use "Forgot password?" to reset it.';
+  if (code === 'auth/email-already-in-use')
+    return 'An account with this email already exists. Switch to Sign In mode.';
+  if (code === 'auth/weak-password')
+    return 'Password must be at least 6 characters.';
+  if (code === 'auth/too-many-requests')
+    return 'Too many failed attempts. Please wait a few minutes and try again.';
+  if (code === 'auth/operation-not-allowed')
+    return 'Email/password sign-in is not enabled. Please contact the administrator.';
+  if (code === 'auth/network-request-failed')
+    return 'Network error. Check your internet connection and try again.';
+  // Fallback: show code + message so it's diagnosable
+  return e.message + (code ? ` (${code})` : '');
+}
+
 async function submitEmail() {
-  if (!_fbAuth) return;
+  if (!_fbAuth) { showAuthError('Authentication not ready. Please refresh the page.'); return; }
   clearAuthError();
   const email = document.getElementById('auth-email').value.trim();
   const pass  = document.getElementById('auth-password').value;
@@ -1511,9 +1534,23 @@ async function submitEmail() {
       await _fbAuth.signInWithEmailAndPassword(email, pass);
     }
   } catch(e) {
-    showAuthError(e.message);
+    console.error('Auth error:', e.code, e.message);
+    showAuthError(_friendlyAuthError(e));
   }
   btn.disabled = false;
+}
+
+async function sendPasswordReset() {
+  if (!_fbAuth) return;
+  const email = document.getElementById('auth-email').value.trim();
+  if (!email) { showAuthError('Enter your email address first, then click Forgot password.'); return; }
+  try {
+    await _fbAuth.sendPasswordResetEmail(email);
+    showAuthError('Password reset email sent! Check your inbox.');
+    document.getElementById('auth-error').style.color = '#a6e3a1';
+  } catch(e) {
+    showAuthError(_friendlyAuthError(e));
+  }
 }
 
 function toggleAuthMode() {
@@ -1547,7 +1584,9 @@ function showAuthError(msg) {
   el.textContent = msg; el.classList.add('show');
 }
 function clearAuthError() {
-  document.getElementById('auth-error').classList.remove('show');
+  const el = document.getElementById('auth-error');
+  el.classList.remove('show');
+  el.style.color = '';  // reset from green password-reset confirmation
 }
 
 // Patch all API calls to include auth token
