@@ -1737,6 +1737,10 @@ async def get_history(request: Request, conn_id: str):
 async def clear_history(request: Request, conn_id: str):
     uid = await _get_uid(request)
     _user_history(uid)[conn_id] = []
+    try:
+        _history_file(uid).write_text(json.dumps(_user_history(uid), indent=2))
+    except Exception:
+        pass
     return {"cleared": True}
 
 
@@ -1803,6 +1807,7 @@ async def create_share(request: Request, req: ShareRequest):
         "created_at": datetime.datetime.utcnow().isoformat(),
         "uid": uid,
     }
+    _save_shares()
     return {"share_id": share_id}
 
 
@@ -1900,12 +1905,12 @@ Schema:
 
             _track(uid, "nl")
 
-            client = groq.AsyncGroq(api_key=GROQ_KEY)
+            client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY", ""))
             messages = [{"role": "system", "content": system}] + conversation
             full_reply = ""
             try:
                 stream = await client.chat.completions.create(
-                    model=GROQ_MODEL,
+                    model=MODEL,
                     messages=messages,
                     max_tokens=800,
                     stream=True,
