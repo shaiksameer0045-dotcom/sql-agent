@@ -583,6 +583,162 @@
     padding: 10px 12px; margin-top: 10px; font-family: monospace; font-size: 11px; color: #a6e3a1;
     word-break: break-all; cursor: pointer;
   }
+
+  /* ── Navigator search ── */
+  #nav-search-wrap { padding: 6px 8px; border-bottom: 1px solid #313244; flex-shrink: 0; }
+  #nav-search {
+    width: 100%; background: #1e1e2e; border: 1px solid #313244; border-radius: 5px;
+    color: #cdd6f4; padding: 5px 9px; font-size: 11px; font-family: inherit;
+  }
+  #nav-search:focus { outline: none; border-color: #7c5cfc; }
+  #nav-search::placeholder { color: #585b70; }
+
+  /* ── Result filter/sort bar ── */
+  #result-filter-bar {
+    display: none; align-items: center; gap: 6px; padding: 6px 14px;
+    background: #24273a; border-bottom: 1px solid #313244; flex-shrink: 0;
+  }
+  #result-search {
+    flex: 1; background: #1e1e2e; border: 1px solid #45475a; border-radius: 5px;
+    color: #cdd6f4; padding: 5px 9px; font-size: 11px; font-family: inherit; min-width: 0;
+  }
+  #result-search:focus { outline: none; border-color: #7c5cfc; }
+  #result-search::placeholder { color: #585b70; }
+  .col-filter-select {
+    background: #1e1e2e; border: 1px solid #45475a; border-radius: 5px;
+    color: #cdd6f4; padding: 4px 7px; font-size: 11px; font-family: inherit;
+  }
+
+  /* ── Pagination bar ── */
+  #pagination-bar {
+    display: none; align-items: center; justify-content: center; gap: 8px;
+    padding: 6px 14px; background: #1e1e2e; border-top: 1px solid #313244;
+    font-size: 11px; color: #a6adc8; flex-shrink: 0;
+  }
+  .page-btn {
+    background: transparent; border: 1px solid #45475a; color: #a6adc8;
+    border-radius: 4px; padding: 3px 9px; font-size: 11px; cursor: pointer; transition: all .15s;
+  }
+  .page-btn:hover:not(:disabled) { border-color: #7c5cfc; color: #cba6f7; }
+  .page-btn:disabled { opacity: .35; cursor: default; }
+  .page-btn.active { background: #7c5cfc; border-color: #7c5cfc; color: #fff; }
+
+  /* ── Sortable table headers ── */
+  .sortable-th { cursor: pointer; user-select: none; position: relative; }
+  .sortable-th:hover { color: #cba6f7; }
+  .sort-arrow { font-size: 9px; margin-left: 3px; opacity: .5; }
+  .sortable-th.asc .sort-arrow::after { content: '▲'; opacity: 1; }
+  .sortable-th.desc .sort-arrow::after { content: '▼'; opacity: 1; }
+  .sortable-th .sort-arrow::after { content: '⇅'; }
+
+  /* ── Column resize handles ── */
+  .col-resize-handle {
+    position: absolute; right: 0; top: 0; bottom: 0; width: 4px;
+    cursor: col-resize; background: transparent;
+  }
+  .col-resize-handle:hover { background: #7c5cfc; }
+
+  /* ── AI Chat panel ── */
+  #chat-panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+  #chat-messages { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .chat-msg { display: flex; gap: 10px; align-items: flex-start; }
+  .chat-msg.user { flex-direction: row-reverse; }
+  .chat-avatar { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+  .chat-avatar.ai { background: #7c5cfc; }
+  .chat-avatar.user { background: #313244; }
+  .chat-bubble {
+    background: #24273a; border: 1px solid #313244; border-radius: 10px;
+    padding: 9px 13px; max-width: 80%; font-size: 12px; line-height: 1.6;
+  }
+  .chat-msg.user .chat-bubble { background: #2a1f4d; border-color: #7c5cfc; }
+  .chat-bubble pre { background: #181825; border-radius: 5px; padding: 8px; overflow-x: auto; font-size: 11px; margin: 6px 0; }
+  .chat-bubble code { font-family: monospace; }
+  #chat-input-area { padding: 10px 14px; background: #24273a; border-top: 1px solid #313244; display: flex; gap: 8px; flex-shrink: 0; }
+  #chat-input { flex: 1; background: #1e1e2e; border: 1px solid #45475a; border-radius: 6px; color: #cdd6f4; padding: 8px 12px; font-size: 12px; font-family: inherit; resize: none; min-height: 38px; max-height: 100px; }
+  #chat-input:focus { outline: none; border-color: #7c5cfc; }
+  #btn-chat-send { background: #7c5cfc; color: #fff; border: none; border-radius: 6px; padding: 8px 16px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  #btn-chat-send:hover { background: #9b7ff8; }
+
+  /* ── ER Diagram panel ── */
+  #er-panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+  #er-canvas-wrap { flex: 1; overflow: auto; padding: 20px; position: relative; }
+  #er-canvas { min-width: 100%; min-height: 400px; }
+  .er-table-card {
+    position: absolute; background: #24273a; border: 1px solid #45475a;
+    border-radius: 8px; min-width: 160px; font-size: 11px; box-shadow: 0 4px 16px rgba(0,0,0,.4);
+    cursor: move; user-select: none;
+  }
+  .er-table-card .er-table-header { background: #313244; border-radius: 8px 8px 0 0; padding: 6px 10px; font-weight: 700; color: #cba6f7; font-size: 12px; }
+  .er-table-card .er-col-row { padding: 3px 10px; border-top: 1px solid #1e1e2e; display: flex; gap: 8px; align-items: center; }
+  .er-col-row .er-pk { color: #f9e2af; font-size: 9px; }
+  .er-col-row .er-col-type { color: #585b70; margin-left: auto; font-style: italic; }
+  svg#er-svg { position: absolute; top: 0; left: 0; pointer-events: none; }
+
+  /* ── Alerts panel ── */
+  #alerts-panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+  .alert-item { background: #24273a; border: 1px solid #45475a; border-radius: 8px; padding: 12px; margin: 8px; }
+  .alert-item-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .alert-name { font-weight: 700; font-size: 13px; flex: 1; }
+  .alert-badge { font-size: 9px; padding: 2px 7px; border-radius: 10px; background: #313244; color: #a6adc8; }
+  .alert-badge.enabled { background: rgba(166,227,161,.2); color: #a6e3a1; border: 1px solid #a6e3a1; }
+  .alert-sql { font-family: monospace; font-size: 11px; color: #89b4fa; background: #181825; padding: 6px 8px; border-radius: 4px; margin: 4px 0; }
+  .alert-meta { font-size: 10px; color: #585b70; margin-top: 4px; }
+  .alert-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+  /* ── Admin panel ── */
+  #admin-panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding: 16px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .stat-card { background: #24273a; border: 1px solid #45475a; border-radius: 8px; padding: 16px; text-align: center; }
+  .stat-value { font-size: 28px; font-weight: 800; color: #cba6f7; }
+  .stat-label { font-size: 11px; color: #585b70; margin-top: 4px; }
+  .chart-section { background: #24273a; border: 1px solid #45475a; border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+  .chart-section h3 { font-size: 12px; color: #a6adc8; margin-bottom: 10px; }
+
+  /* ── Keyboard shortcuts modal ── */
+  .kbd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 20px; }
+  .kbd-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid #313244; }
+  .kbd-key { background: #313244; border: 1px solid #45475a; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-family: monospace; color: #cdd6f4; white-space: nowrap; }
+  .kbd-desc { font-size: 11px; color: #a6adc8; }
+
+  /* ── Onboarding modal ── */
+  #onboarding-modal .modal { max-width: 520px; }
+  .onboard-step { text-align: center; padding: 10px 0 20px; }
+  .onboard-icon { font-size: 48px; margin-bottom: 12px; }
+  .onboard-title { font-size: 18px; font-weight: 700; color: #cba6f7; margin-bottom: 8px; }
+  .onboard-desc { font-size: 13px; color: #a6adc8; line-height: 1.7; }
+  .onboard-dots { display: flex; gap: 6px; justify-content: center; margin-top: 16px; }
+  .onboard-dot { width: 8px; height: 8px; border-radius: 50%; background: #313244; transition: background .2s; }
+  .onboard-dot.active { background: #7c5cfc; }
+
+  /* ── Mobile responsive ── */
+  @media (max-width: 768px) {
+    #navigator { width: 0; min-width: 0; position: fixed; left: 0; top: 0; bottom: 0; z-index: 100; transform: translateX(-100%); transition: transform .2s; }
+    #navigator.mobile-open { width: 280px; min-width: 280px; transform: translateX(0); box-shadow: 4px 0 24px rgba(0,0,0,.5); }
+    #resizer { display: none; }
+    #titlebar .tagline { display: none; }
+    #mobile-nav-toggle { display: flex; }
+    .btn-new-conn span { display: none; }
+    .q-tab { padding: 8px 10px; font-size: 11px; }
+    .result-actions { flex-wrap: wrap; }
+    #sql-editor-area { flex-direction: column; }
+  }
+  #mobile-nav-toggle {
+    display: none; background: transparent; border: none; color: #a6adc8;
+    cursor: pointer; font-size: 18px; padding: 4px 8px;
+  }
+
+  /* ── Autocomplete dropdown ── */
+  .autocomplete-wrap { position: relative; }
+  #autocomplete-list {
+    position: absolute; top: 100%; left: 0; right: 0; z-index: 200;
+    background: #24273a; border: 1px solid #45475a; border-radius: 6px;
+    max-height: 200px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  }
+  .ac-item { padding: 6px 12px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 8px; }
+  .ac-item:hover, .ac-item.selected { background: #313244; }
+  .ac-type { font-size: 9px; padding: 1px 5px; border-radius: 3px; background: #313244; color: #585b70; }
+  .ac-type.table { background: rgba(137,180,250,.2); color: #89b4fa; }
+  .ac-type.column { background: rgba(243,139,168,.15); color: #f38ba8; }
 </style>
 </head>
 <body>
@@ -624,10 +780,12 @@
 
 <!-- Title Bar -->
 <div id="titlebar">
-  <span class="logo">⚡ SQL Agent</span>
+  <button id="mobile-nav-toggle" onclick="toggleMobileNav()">☰</button>
+  <span class="logo">⚡ QueryLux</span>
   <span class="tagline">Connect any database · Query with natural language</span>
   <div class="spacer"></div>
   <button class="btn-new-conn" onclick="openConnModal()">＋ New Connection</button>
+  <button class="btn-sm" onclick="showKeyboardShortcuts()" title="Keyboard shortcuts" style="border:none;font-size:14px;padding:4px 8px;">⌨</button>
   <div id="user-info">
     <div class="user-avatar" id="user-avatar"></div>
     <span class="user-name" id="user-name"></span>
@@ -641,6 +799,9 @@
   <!-- Navigator -->
   <div id="navigator">
     <div id="nav-header">Database Navigator</div>
+    <div id="nav-search-wrap">
+      <input id="nav-search" type="text" placeholder="Search tables & columns…" oninput="filterNavTree(this.value)">
+    </div>
     <div id="nav-tree"></div>
   </div>
 
@@ -677,11 +838,15 @@
     <!-- Query Panel -->
     <div id="query-panel-wrap">
 
-      <div id="query-tabs">
-        <div class="q-tab active" id="tab-nl" onclick="switchTab('nl')">💬 Natural Language</div>
+      <div id="query-tabs" style="overflow-x:auto;">
+        <div class="q-tab active" id="tab-nl" onclick="switchTab('nl')">💬 Ask AI</div>
         <div class="q-tab" id="tab-sql" onclick="switchTab('sql')">⌨ SQL Editor</div>
+        <div class="q-tab" id="tab-chat" onclick="switchTab('chat')">🗨 AI Chat</div>
+        <div class="q-tab" id="tab-er" onclick="switchTab('er')">🗂 ER Diagram</div>
+        <div class="q-tab" id="tab-alerts" onclick="switchTab('alerts')">🔔 Alerts</div>
         <div class="q-tab" id="tab-saved" onclick="switchTab('saved')">🔖 Saved</div>
         <div class="q-tab" id="tab-history" onclick="switchTab('history')">🕐 History</div>
+        <div class="q-tab" id="tab-admin" onclick="switchTab('admin')">📊 Admin</div>
       </div>
 
       <!-- NL -->
@@ -755,7 +920,24 @@
               <button class="btn-export" onclick="exportJSON()">⬇ JSON</button>
             </div>
           </div>
-          <div class="results-table-wrap" id="results-table-wrap"></div>
+          <!-- Filter bar -->
+        <div id="result-filter-bar">
+          <input id="result-search" type="text" placeholder="Search rows…" oninput="filterResults(this.value)">
+          <select class="col-filter-select" id="result-filter-col" onchange="filterResults(document.getElementById('result-search').value)">
+            <option value="">All columns</option>
+          </select>
+          <span id="result-filter-count" style="font-size:10px;color:#585b70;white-space:nowrap;"></span>
+        </div>
+        <div class="results-table-wrap" id="results-table-wrap"></div>
+        <!-- Pagination bar -->
+        <div id="pagination-bar">
+          <button class="page-btn" id="pg-first" onclick="gotoPage(1)">«</button>
+          <button class="page-btn" id="pg-prev" onclick="gotoPage(_currentPage-1)">‹</button>
+          <span id="pg-info" style="padding:0 8px;"></span>
+          <button class="page-btn" id="pg-next" onclick="gotoPage(_currentPage+1)">›</button>
+          <button class="page-btn" id="pg-last" onclick="gotoPage(_totalPages)">»</button>
+          <span id="pg-total" style="color:#585b70;"></span>
+        </div>
           <!-- Chart Panel -->
           <div id="chart-panel">
             <div class="chart-controls">
@@ -817,6 +999,78 @@
         <div id="history-list" style="flex:1;overflow-y:auto;padding:12px;"></div>
       </div>
 
+      <!-- AI Chat Panel -->
+      <div id="chat-panel">
+        <div id="chat-messages">
+          <div class="status-empty">
+            <div class="icon">🗨</div>
+            <div class="title">Multi-turn AI Chat</div>
+            <div class="sub">Ask follow-up questions about your data. Context is remembered.</div>
+          </div>
+        </div>
+        <div id="chat-input-area">
+          <textarea id="chat-input" rows="1" placeholder="Ask a follow-up question…" onkeydown="chatKeyDown(event)"></textarea>
+          <button id="btn-chat-send" onclick="sendChatMessage()">Send ▶</button>
+        </div>
+      </div>
+
+      <!-- ER Diagram Panel -->
+      <div id="er-panel">
+        <div style="padding:8px 14px;border-bottom:1px solid #313244;display:flex;align-items:center;gap:10px;flex-shrink:0;">
+          <span style="font-size:12px;font-weight:700;color:#cba6f7;">🗂 Entity-Relationship Diagram</span>
+          <span style="font-size:11px;color:#585b70;flex:1;">Drag tables to rearrange · Detected relationships shown</span>
+          <button class="btn-action" onclick="loadERDiagram()">↻ Refresh</button>
+        </div>
+        <div id="er-canvas-wrap">
+          <svg id="er-svg" width="100%" height="100%"></svg>
+          <div id="er-canvas"></div>
+          <div id="er-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:#45475a;">
+            <div style="font-size:36px;opacity:.3;">🗂</div>
+            <div>Select a connection to view ER diagram</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Alerts Panel -->
+      <div id="alerts-panel">
+        <div style="padding:8px 14px;border-bottom:1px solid #313244;display:flex;align-items:center;gap:10px;flex-shrink:0;">
+          <span style="font-size:12px;font-weight:700;color:#f9e2af;">🔔 Scheduled Query Alerts</span>
+          <div style="flex:1;"></div>
+          <button class="btn-action" onclick="showNewAlertForm()">＋ New Alert</button>
+        </div>
+        <div id="new-alert-form" style="display:none;padding:12px 14px;border-bottom:1px solid #313244;background:#1e1e2e;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div class="field-group" style="margin:0;"><label>Alert Name</label><input id="alert-name" type="text" placeholder="Daily revenue check"></div>
+            <div class="field-group" style="margin:0;"><label>Schedule</label>
+              <select id="alert-schedule" style="width:100%;background:#1e1e2e;border:1px solid #45475a;border-radius:5px;color:#cdd6f4;padding:6px 8px;">
+                <option value="hourly">Every hour</option>
+                <option value="daily" selected>Daily</option>
+                <option value="weekly">Weekly</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-group" style="margin:0 0 10px 0;"><label>SQL Query (first result cell is the metric)</label><textarea id="alert-sql" rows="2" style="width:100%;background:#181825;border:1px solid #45475a;border-radius:5px;color:#89b4fa;padding:8px;font-family:monospace;font-size:12px;" placeholder="SELECT COUNT(*) FROM orders WHERE created_at > NOW() - INTERVAL '1 day'"></textarea></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button class="btn-action" onclick="document.getElementById('new-alert-form').style.display='none'">Cancel</button>
+            <button class="btn-action" style="border-color:#a6e3a1;color:#a6e3a1;" onclick="createAlert()">Save Alert</button>
+          </div>
+        </div>
+        <div id="alerts-list" style="flex:1;overflow-y:auto;padding:10px;"></div>
+      </div>
+
+      <!-- Admin Panel -->
+      <div id="admin-panel">
+        <div style="margin-bottom:16px;">
+          <h2 style="font-size:16px;font-weight:700;color:#cba6f7;margin-bottom:4px;">📊 Usage Dashboard</h2>
+          <p style="font-size:11px;color:#585b70;">Real-time stats for this session</p>
+        </div>
+        <div class="stat-grid" id="admin-stat-grid"></div>
+        <div class="chart-section">
+          <h3>Queries per Hour (last 24h)</h3>
+          <canvas id="admin-chart" height="120"></canvas>
+        </div>
+      </div>
+
     </div><!-- /query-panel-wrap -->
   </div><!-- /main -->
 </div><!-- /app -->
@@ -851,6 +1105,48 @@
     <div class="modal-footer">
       <button class="btn-secondary" onclick="copyAPICode()">📋 Copy Code</button>
       <button class="btn-secondary" onclick="document.getElementById('api-modal').classList.remove('open')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Keyboard Shortcuts Modal -->
+<div class="modal-overlay" id="kbd-modal">
+  <div class="modal" style="width:560px;max-width:95vw;">
+    <div class="modal-header">
+      <span class="modal-title">⌨ Keyboard Shortcuts</span>
+      <button class="modal-close" onclick="document.getElementById('kbd-modal').classList.remove('open')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="kbd-grid">
+        <div class="kbd-row"><span class="kbd-key">Ctrl + Enter</span><span class="kbd-desc">Run SQL</span></div>
+        <div class="kbd-row"><span class="kbd-key">Ctrl + Shift + F</span><span class="kbd-desc">Format SQL</span></div>
+        <div class="kbd-row"><span class="kbd-key">Ctrl + /</span><span class="kbd-desc">Toggle comment</span></div>
+        <div class="kbd-row"><span class="kbd-key">Ctrl + K</span><span class="kbd-desc">Command palette</span></div>
+        <div class="kbd-row"><span class="kbd-key">Ctrl + S</span><span class="kbd-desc">Save query</span></div>
+        <div class="kbd-row"><span class="kbd-key">Ctrl + E</span><span class="kbd-desc">Focus SQL editor</span></div>
+        <div class="kbd-row"><span class="kbd-key">Escape</span><span class="kbd-desc">Close modal / panel</span></div>
+        <div class="kbd-row"><span class="kbd-key">Tab</span><span class="kbd-desc">Accept autocomplete</span></div>
+        <div class="kbd-row"><span class="kbd-key">F5</span><span class="kbd-desc">Refresh schema</span></div>
+        <div class="kbd-row"><span class="kbd-key">?</span><span class="kbd-desc">Show this help</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Onboarding Modal -->
+<div class="modal-overlay" id="onboarding-modal" style="z-index:1010;">
+  <div class="modal" style="width:520px;max-width:95vw;">
+    <div class="modal-header">
+      <span class="modal-title">Welcome to QueryLux ⚡</span>
+      <button class="modal-close" onclick="closeOnboarding()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="onboard-content"></div>
+      <div class="onboard-dots" id="onboard-dots"></div>
+    </div>
+    <div class="modal-footer" style="justify-content:space-between;">
+      <button class="btn-secondary" id="onboard-prev-btn" onclick="onboardNav(-1)">← Back</button>
+      <button class="btn-secondary" id="onboard-next-btn" onclick="onboardNav(1)" style="background:#7c5cfc;color:#fff;border-color:#7c5cfc;">Next →</button>
     </div>
   </div>
 </div>
@@ -1282,15 +1578,25 @@ function closePreview() {
 // ── Tabs ───────────────────────────────────────────────────────────────────
 function switchTab(tab) {
   currentTab = tab;
-  ['nl','sql','saved','history'].forEach(t => {
-    document.getElementById('tab-'+t).className = 'q-tab' + (tab===t?' active':'');
+  const allTabs = ['nl','sql','chat','er','alerts','saved','history','admin'];
+  allTabs.forEach(t => {
+    const el = document.getElementById('tab-'+t);
+    if (el) el.className = 'q-tab' + (tab===t?' active':'');
   });
   document.getElementById('nl-panel').style.display      = tab==='nl'      ? 'flex' : 'none';
   document.getElementById('sql-panel').style.display     = tab==='sql'     ? 'flex' : 'none';
   document.getElementById('saved-panel').style.display   = tab==='saved'   ? 'flex' : 'none';
   document.getElementById('history-panel').style.display = tab==='history' ? 'flex' : 'none';
+  document.getElementById('chat-panel').style.display    = tab==='chat'    ? 'flex' : 'none';
+  document.getElementById('er-panel').style.display      = tab==='er'      ? 'flex' : 'none';
+  document.getElementById('alerts-panel').style.display  = tab==='alerts'  ? 'flex' : 'none';
+  document.getElementById('admin-panel').style.display   = tab==='admin'   ? 'flex' : 'none';
   if (tab === 'history' && activeConnId) loadHistory();
   if (tab === 'saved'   && activeConnId) loadSaved();
+  if (tab === 'er'      && activeConnId) loadERDiagram();
+  if (tab === 'alerts'  && activeConnId) loadAlerts();
+  if (tab === 'admin')  loadAdminStats();
+  if (tab === 'chat'    && activeConnId) initChat();
 }
 
 // ── NL Panel ───────────────────────────────────────────────────────────────
@@ -1422,9 +1728,17 @@ async function submitNL() {
 }
 
 // ── SQL Editor ─────────────────────────────────────────────────────────────
-async function runSQL() {
+let _currentPage = 1, _totalPages = 1, _currentSQL = '';
+let _sortCol = -1, _sortDir = 1;
+let _filteredRows = null;
+
+async function runSQL(page) {
   if (!activeConnId) { showToast('Select a connection first', 'error'); return; }
-  const sql = document.getElementById('sql-editor').value.trim();
+  if (!page) {
+    _currentSQL = document.getElementById('sql-editor').value.trim();
+    page = 1; _sortCol = -1; _sortDir = 1; _filteredRows = null;
+  }
+  const sql = _currentSQL;
   if (!sql) return;
 
   const btn = document.getElementById('btn-run-sql');
@@ -1434,10 +1748,10 @@ async function runSQL() {
   resultsPanel.style.display = 'none';
 
   try {
-    const r = await fetch(`/api/connections/${activeConnId}/execute`, {
+    const r = await authFetch(`/api/connections/${activeConnId}/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sql }),
+      body: JSON.stringify({ sql: _currentSQL, page }),
     });
     const data = await r.json();
     if (data.error) {
@@ -1445,13 +1759,10 @@ async function runSQL() {
       eb.textContent = data.error; eb.style.display = 'block';
     } else {
       currentResults = data;
-      currentResults.sql = sql;
-      document.getElementById('results-count').textContent = `${data.rows.length} row${data.rows.length!==1?'s':''}`;
-      document.getElementById('results-table-wrap').innerHTML = renderTable(data.columns, data.rows);
-      resultsPanel.style.display = 'flex';
-      document.getElementById('btn-export-sql').style.display = 'inline-block';
-      document.getElementById('btn-gen-api').style.display = 'inline-block';
-      document.getElementById('result-actions').style.display = 'flex';
+      currentResults.sql = _currentSQL;
+      _currentPage = data.page || 1;
+      _totalPages = data.total_pages || 1;
+      showResultsData(data);
       document.getElementById('optimize-panel').style.display = 'none';
       hideChart(); hidePivot();
       refreshNavTables();
@@ -1463,11 +1774,111 @@ async function runSQL() {
   btn.disabled = false;
 }
 
+function showResultsData(data) {
+  const total = data.total !== undefined ? data.total : data.rows.length;
+  const page = data.page || 1;
+  const totalPages = data.total_pages || 1;
+  const pageSize = data.page_size || data.rows.length;
+
+  const countEl = document.getElementById('results-count');
+  if (totalPages > 1) {
+    const from = (page - 1) * pageSize + 1;
+    const to = Math.min(page * pageSize, total);
+    countEl.textContent = `${from}–${to} of ${total.toLocaleString()} rows (page ${page}/${totalPages})`;
+  } else {
+    countEl.textContent = `${total.toLocaleString()} row${total!==1?'s':''}`;
+  }
+
+  _filteredRows = null;
+  renderSortedTable(data.columns, data.rows);
+
+  // Show/hide pagination
+  const pgBar = document.getElementById('pagination-bar');
+  pgBar.style.display = totalPages > 1 ? 'flex' : 'none';
+  if (totalPages > 1) {
+    document.getElementById('pg-first').disabled = page <= 1;
+    document.getElementById('pg-prev').disabled = page <= 1;
+    document.getElementById('pg-next').disabled = page >= totalPages;
+    document.getElementById('pg-last').disabled = page >= totalPages;
+    document.getElementById('pg-info').textContent = `Page ${page} of ${totalPages}`;
+    document.getElementById('pg-total').textContent = `${total.toLocaleString()} total rows`;
+  }
+
+  // Show filter bar
+  const filterBar = document.getElementById('result-filter-bar');
+  filterBar.style.display = data.rows.length ? 'flex' : 'none';
+  document.getElementById('result-search').value = '';
+  document.getElementById('result-filter-count').textContent = '';
+  const colSel = document.getElementById('result-filter-col');
+  colSel.innerHTML = '<option value="">All columns</option>';
+  (data.columns || []).forEach((c, i) => {
+    const o = document.createElement('option'); o.value = i; o.textContent = c; colSel.appendChild(o);
+  });
+
+  const resultsPanel = document.getElementById('sql-results');
+  resultsPanel.style.display = 'flex';
+  document.getElementById('btn-export-sql').style.display = 'inline-block';
+  document.getElementById('btn-gen-api').style.display = 'inline-block';
+  document.getElementById('result-actions').style.display = 'flex';
+}
+
+async function gotoPage(p) {
+  if (!currentResults) return;
+  p = Math.max(1, Math.min(p, _totalPages));
+  _currentPage = p;
+  await runSQL(p);
+}
+
+function filterResults(query) {
+  if (!currentResults) return;
+  const colIdx = parseInt(document.getElementById('result-filter-col').value);
+  const q = query.toLowerCase();
+  const rows = currentResults.rows;
+  if (!q) {
+    _filteredRows = null;
+    renderSortedTable(currentResults.columns, rows);
+    document.getElementById('result-filter-count').textContent = '';
+    return;
+  }
+  _filteredRows = rows.filter(row => {
+    const checkCols = isNaN(colIdx) ? row : [row[colIdx]];
+    return (isNaN(colIdx) ? row : [row[colIdx]]).some(v => v !== null && String(v).toLowerCase().includes(q));
+  });
+  document.getElementById('result-filter-count').textContent = `${_filteredRows.length} match${_filteredRows.length!==1?'es':''}`;
+  renderSortedTable(currentResults.columns, _filteredRows);
+}
+
+function sortByCol(colIdx) {
+  if (_sortCol === colIdx) _sortDir = -_sortDir;
+  else { _sortCol = colIdx; _sortDir = 1; }
+  const rows = _filteredRows || currentResults.rows;
+  renderSortedTable(currentResults.columns, rows);
+}
+
+function renderSortedTable(columns, rows) {
+  let display = rows.slice();
+  if (_sortCol >= 0) {
+    display.sort((a, b) => {
+      const av = a[_sortCol], bv = b[_sortCol];
+      if (av === null) return 1; if (bv === null) return -1;
+      const diff = (typeof av === 'number' && typeof bv === 'number') ? av - bv : String(av).localeCompare(String(bv));
+      return diff * _sortDir;
+    });
+  }
+  document.getElementById('results-table-wrap').innerHTML = renderTable(columns, display);
+}
+
 // ── Render Table ───────────────────────────────────────────────────────────
 function renderTable(columns, rows) {
   if (!columns || !columns.length) return '<div style="color:#585b70;font-size:12px;padding:12px;">No results</div>';
   let html = '<table><thead><tr>';
-  for (const c of columns) html += `<th>${esc(String(c))}</th>`;
+  for (let i = 0; i < columns.length; i++) {
+    const sortClass = _sortCol === i ? (_sortDir === 1 ? 'asc' : 'desc') : '';
+    html += `<th class="sortable-th ${sortClass}" onclick="sortByCol(${i})" style="position:relative;">
+      ${esc(String(columns[i]))} <span class="sort-arrow"></span>
+      <div class="col-resize-handle" onclick="event.stopPropagation()"></div>
+    </th>`;
+  }
   html += '</tr></thead><tbody>';
   for (const row of rows) {
     html += '<tr>';
@@ -2533,6 +2944,504 @@ function exportJSON() {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = 'results.json'; a.click();
 }
+
+// ── Navigator Search ───────────────────────────────────────────────────────
+function filterNavTree(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll('.tree-conn').forEach(connNode => {
+    const tables = connNode.querySelectorAll('.tree-table-row');
+    let connMatch = false;
+    tables.forEach(row => {
+      const name = row.querySelector('.tree-table-name')?.textContent.toLowerCase() || '';
+      const colRows = row.parentElement?.nextElementSibling?.querySelectorAll('.tree-col-row') || [];
+      let match = !q || name.includes(q);
+      colRows.forEach(cr => {
+        const cn = cr.textContent.toLowerCase();
+        const colMatch = cn.includes(q);
+        cr.style.display = (colMatch || !q) ? '' : 'none';
+        if (colMatch) match = true;
+      });
+      row.style.display = match ? '' : 'none';
+      if (match) connMatch = true;
+    });
+    connNode.style.display = (!q || connMatch) ? '' : 'none';
+  });
+}
+
+// ── Mobile Nav ─────────────────────────────────────────────────────────────
+function toggleMobileNav() {
+  document.getElementById('navigator').classList.toggle('mobile-open');
+}
+document.addEventListener('click', e => {
+  const nav = document.getElementById('navigator');
+  if (nav.classList.contains('mobile-open') && !nav.contains(e.target) && !e.target.closest('#mobile-nav-toggle')) {
+    nav.classList.remove('mobile-open');
+  }
+});
+
+// ── SQL Autocomplete ───────────────────────────────────────────────────────
+let _acData = { tables: [], columns: [] };
+let _acIndex = -1;
+let _acItems = [];
+
+async function loadAutocomplete() {
+  if (!activeConnId) return;
+  try {
+    const r = await authFetch(`/api/connections/${activeConnId}/autocomplete`);
+    _acData = await r.json();
+  } catch {}
+}
+
+function setupAutocomplete() {
+  const ed = document.getElementById('sql-editor');
+  let acEl = document.getElementById('autocomplete-list');
+  if (!acEl) {
+    acEl = document.createElement('div');
+    acEl.id = 'autocomplete-list';
+    acEl.style.display = 'none';
+    ed.parentElement.style.position = 'relative';
+    ed.parentElement.appendChild(acEl);
+  }
+
+  ed.addEventListener('input', () => {
+    const val = ed.value;
+    const pos = ed.selectionStart;
+    const before = val.slice(0, pos);
+    const word = before.match(/[\w.]+$/) ? before.match(/[\w.]+$/)[0] : '';
+    if (word.length < 2) { hideAC(); return; }
+    showAC(word, ed, acEl);
+  });
+
+  ed.addEventListener('keydown', e => {
+    const acEl = document.getElementById('autocomplete-list');
+    if (acEl.style.display === 'none') return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveAC(1, acEl); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveAC(-1, acEl); }
+    else if (e.key === 'Tab' || e.key === 'Enter') {
+      if (_acIndex >= 0) { e.preventDefault(); applyAC(_acItems[_acIndex], ed, acEl); }
+    } else if (e.key === 'Escape') hideAC();
+  });
+
+  document.addEventListener('click', e => { if (!e.target.closest('#autocomplete-list')) hideAC(); });
+}
+
+function showAC(word, ed, acEl) {
+  const wl = word.toLowerCase();
+  const matches = [];
+  _acData.tables.forEach(t => { if (t.toLowerCase().includes(wl)) matches.push({ label: t, type: 'table' }); });
+  _acData.columns.forEach(c => {
+    const full = `${c.table}.${c.column}`;
+    if (c.column.toLowerCase().includes(wl) || full.toLowerCase().includes(wl))
+      matches.push({ label: c.column, detail: c.table, type: 'column' });
+  });
+  if (!matches.length) { hideAC(); return; }
+  _acItems = matches.slice(0, 12);
+  _acIndex = -1;
+  acEl.innerHTML = _acItems.map((m, i) => `
+    <div class="ac-item" data-idx="${i}" onclick="applyAC(_acItems[${i}], document.getElementById('sql-editor'), document.getElementById('autocomplete-list'))">
+      <span class="ac-type ${m.type}">${m.type === 'table' ? '⬛' : '○'}</span>
+      <span>${esc(m.label)}</span>
+      ${m.detail ? `<span style="color:#585b70;font-size:10px;margin-left:auto">${esc(m.detail)}</span>` : ''}
+    </div>`).join('');
+  acEl.style.display = 'block';
+}
+
+function hideAC() {
+  const el = document.getElementById('autocomplete-list');
+  if (el) el.style.display = 'none';
+  _acIndex = -1;
+}
+
+function moveAC(dir, acEl) {
+  const items = acEl.querySelectorAll('.ac-item');
+  if (!items.length) return;
+  _acIndex = Math.max(-1, Math.min(_acIndex + dir, items.length - 1));
+  items.forEach((el, i) => el.classList.toggle('selected', i === _acIndex));
+}
+
+function applyAC(item, ed, acEl) {
+  if (!item) return;
+  const val = ed.value;
+  const pos = ed.selectionStart;
+  const before = val.slice(0, pos);
+  const match = before.match(/[\w.]+$/);
+  const start = match ? pos - match[0].length : pos;
+  ed.value = val.slice(0, start) + item.label + val.slice(pos);
+  ed.selectionStart = ed.selectionEnd = start + item.label.length;
+  hideAC();
+}
+
+// ── ER Diagram ─────────────────────────────────────────────────────────────
+async function loadERDiagram() {
+  if (!activeConnId) return;
+  const canvas = document.getElementById('er-canvas');
+  const empty = document.getElementById('er-empty');
+  canvas.innerHTML = '';
+  document.getElementById('er-svg').innerHTML = '';
+  empty.style.display = 'none';
+  try {
+    const r = await authFetch(`/api/connections/${activeConnId}/er-diagram`);
+    const { tables, relationships } = await r.json();
+    if (!tables.length) { empty.style.display = 'flex'; return; }
+    renderERDiagram(tables, relationships);
+  } catch(e) {
+    canvas.innerHTML = `<div style="color:#f38ba8;padding:20px;">${e.message}</div>`;
+  }
+}
+
+function renderERDiagram(tables, relationships) {
+  const canvas = document.getElementById('er-canvas');
+  const wrap = document.getElementById('er-canvas-wrap');
+  const cols = Math.ceil(Math.sqrt(tables.length));
+  const CARD_W = 200, CARD_H_BASE = 36, COL_H = 22, GAP = 40;
+  const positions = {};
+  const cards = {};
+
+  tables.forEach((t, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    const x = col * (CARD_W + GAP) + 20;
+    const y = row * (CARD_H_BASE + t.columns.length * COL_H + GAP) + 20;
+    positions[t.name] = { x, y };
+
+    const card = document.createElement('div');
+    card.className = 'er-table-card';
+    card.style.left = x + 'px'; card.style.top = y + 'px'; card.style.width = CARD_W + 'px';
+    card.dataset.table = t.name;
+
+    let html = `<div class="er-table-header">⬛ ${esc(t.name)} <span style="font-size:9px;font-weight:400;color:#a6adc8;">(${t.row_count.toLocaleString()})</span></div>`;
+    t.columns.forEach(c => {
+      const isPk = c.name.toLowerCase() === 'id' || c.is_pk;
+      html += `<div class="er-col-row">${isPk ? '<span class="er-pk">🔑</span>' : '<span style="width:12px"></span>'} <span>${esc(c.name)}</span> <span class="er-col-type">${esc(c.type || '')}</span></div>`;
+    });
+    card.innerHTML = html;
+
+    // Make draggable
+    let dragging = false, ox = 0, oy = 0;
+    card.querySelector('.er-table-header').addEventListener('mousedown', e => {
+      dragging = true;
+      ox = e.clientX - card.offsetLeft;
+      oy = e.clientY - card.offsetTop;
+    });
+    document.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      card.style.left = (e.clientX - ox) + 'px';
+      card.style.top = (e.clientY - oy) + 'px';
+      positions[t.name] = { x: e.clientX - ox, y: e.clientY - oy };
+      drawERLines(relationships, positions, tables);
+    });
+    document.addEventListener('mouseup', () => { dragging = false; });
+
+    canvas.appendChild(card);
+    cards[t.name] = card;
+  });
+
+  // Size canvas
+  const maxX = Math.max(...Object.values(positions).map(p => p.x)) + CARD_W + GAP;
+  const maxY = Math.max(...Object.values(positions).map(p => p.y)) + 200;
+  canvas.style.width = maxX + 'px'; canvas.style.height = maxY + 'px';
+  wrap.style.position = 'relative';
+
+  const svg = document.getElementById('er-svg');
+  svg.setAttribute('width', maxX); svg.setAttribute('height', maxY);
+
+  drawERLines(relationships, positions, tables);
+}
+
+function drawERLines(relationships, positions, tables) {
+  const svg = document.getElementById('er-svg');
+  svg.innerHTML = '';
+  for (const rel of relationships) {
+    const from = positions[rel.from_table];
+    const to = positions[rel.to_table];
+    if (!from || !to) continue;
+    const x1 = from.x + 200, y1 = from.y + 30;
+    const x2 = to.x, y2 = to.y + 30;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const mx = (x1 + x2) / 2;
+    line.setAttribute('d', `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
+    line.setAttribute('stroke', '#7c5cfc');
+    line.setAttribute('stroke-width', '1.5');
+    line.setAttribute('fill', 'none');
+    line.setAttribute('opacity', '0.6');
+    svg.appendChild(line);
+  }
+}
+
+// ── AI Chat ────────────────────────────────────────────────────────────────
+let _chatWs = null;
+
+async function initChat() {
+  const msgs = document.getElementById('chat-messages');
+  if (_chatWs && _chatWs.readyState === WebSocket.OPEN) return;
+  msgs.innerHTML = `<div class="status-empty"><div class="icon">🗨</div><div class="title">Connecting…</div></div>`;
+
+  const token = await getIdToken();
+  _chatWs = new WebSocket(wsUrl(`/ws/chat/${activeConnId}`));
+
+  _chatWs.onopen = () => {
+    _chatWs.send(JSON.stringify({ token: token || '' }));
+  };
+
+  _chatWs.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'ready') {
+      msgs.innerHTML = `<div class="status-empty"><div class="icon">🗨</div><div class="title">Multi-turn AI Chat</div><div class="sub">Ask follow-up questions. Context is remembered across messages.</div></div>`;
+    }
+    if (msg.type === 'delta') {
+      let last = msgs.querySelector('.chat-bubble.streaming');
+      if (!last) {
+        const wrap = document.createElement('div');
+        wrap.className = 'chat-msg';
+        wrap.innerHTML = `<div class="chat-avatar ai">🤖</div><div class="chat-bubble streaming"></div>`;
+        msgs.appendChild(wrap);
+        last = wrap.querySelector('.chat-bubble');
+      }
+      last.innerHTML = marked.parse((last._md = (last._md || '') + msg.content));
+      msgs.scrollTop = msgs.scrollHeight;
+    }
+    if (msg.type === 'done') {
+      const streaming = msgs.querySelector('.chat-bubble.streaming');
+      if (streaming) streaming.classList.remove('streaming');
+      document.getElementById('btn-chat-send').disabled = false;
+    }
+    if (msg.type === 'error') {
+      showToast(msg.message, 'error');
+      document.getElementById('btn-chat-send').disabled = false;
+    }
+  };
+
+  _chatWs.onerror = () => showToast('Chat connection error', 'error');
+  _chatWs.onclose = () => { _chatWs = null; };
+}
+
+function sendChatMessage() {
+  const input = document.getElementById('chat-input');
+  const msg = input.value.trim();
+  if (!msg || !_chatWs || _chatWs.readyState !== WebSocket.OPEN) return;
+
+  const msgs = document.getElementById('chat-messages');
+  // Clear empty state
+  msgs.querySelector('.status-empty')?.remove();
+
+  const userWrap = document.createElement('div');
+  userWrap.className = 'chat-msg user';
+  userWrap.innerHTML = `<div class="chat-avatar user">👤</div><div class="chat-bubble">${esc(msg)}</div>`;
+  msgs.appendChild(userWrap);
+  msgs.scrollTop = msgs.scrollHeight;
+
+  _chatWs.send(JSON.stringify({ message: msg }));
+  input.value = '';
+  document.getElementById('btn-chat-send').disabled = true;
+}
+
+function chatKeyDown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+}
+
+// ── Scheduled Alerts ───────────────────────────────────────────────────────
+async function loadAlerts() {
+  if (!activeConnId) return;
+  const list = document.getElementById('alerts-list');
+  list.innerHTML = '<div style="color:#585b70;padding:12px;font-size:11px;">Loading…</div>';
+  try {
+    const r = await authFetch('/api/alerts');
+    const alerts = await r.json();
+    const connAlerts = alerts.filter(a => a.conn_id === activeConnId);
+    if (!connAlerts.length) {
+      list.innerHTML = '<div style="color:#585b70;padding:16px;font-size:12px;text-align:center;">No alerts yet. Click ＋ New Alert to create one.</div>';
+      return;
+    }
+    list.innerHTML = connAlerts.map(a => `
+      <div class="alert-item">
+        <div class="alert-item-header">
+          <span class="alert-name">${esc(a.name)}</span>
+          <span class="alert-badge ${a.enabled ? 'enabled' : ''}">${a.enabled ? '● Active' : '○ Paused'}</span>
+          <span class="alert-badge">${a.schedule}</span>
+        </div>
+        <div class="alert-sql">${esc(a.sql)}</div>
+        <div class="alert-meta">
+          ${a.last_run ? `Last run: ${new Date(a.last_run).toLocaleString()}` : 'Never run'}
+          ${a.last_result ? ` · Result: ${a.last_result.value ?? 'N/A'}` : ''}
+        </div>
+        <div class="alert-actions">
+          <button class="tbl-action-btn" onclick="runAlertNow('${a.id}')">▶ Run Now</button>
+          <button class="tbl-action-btn" onclick="toggleAlert('${a.id}')">${a.enabled ? '⏸ Pause' : '▶ Enable'}</button>
+          <button class="tbl-action-btn" style="color:#f38ba8" onclick="deleteAlert('${a.id}')">🗑 Delete</button>
+        </div>
+      </div>`).join('');
+  } catch(e) { list.innerHTML = `<div style="color:#f38ba8;padding:12px;">${e.message}</div>`; }
+}
+
+function showNewAlertForm() {
+  const form = document.getElementById('new-alert-form');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  if (form.style.display !== 'none') {
+    const sql = currentResults?.sql || document.getElementById('sql-editor').value.trim();
+    if (sql) document.getElementById('alert-sql').value = sql;
+  }
+}
+
+async function createAlert() {
+  const name = document.getElementById('alert-name').value.trim();
+  const sql = document.getElementById('alert-sql').value.trim();
+  const schedule = document.getElementById('alert-schedule').value;
+  if (!name || !sql) { showToast('Name and SQL are required', 'error'); return; }
+  try {
+    await authFetch('/api/alerts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, conn_id: activeConnId, sql, schedule }),
+    });
+    document.getElementById('new-alert-form').style.display = 'none';
+    document.getElementById('alert-name').value = '';
+    document.getElementById('alert-sql').value = '';
+    showToast('Alert created!', 'success');
+    loadAlerts();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function runAlertNow(id) {
+  try {
+    const r = await authFetch(`/api/alerts/${id}/run`, { method: 'POST' });
+    const d = await r.json();
+    showToast(`Alert result: ${d.value ?? 'N/A'}`, 'success');
+    loadAlerts();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function toggleAlert(id) {
+  await authFetch(`/api/alerts/${id}/toggle`, { method: 'POST' });
+  loadAlerts();
+}
+
+async function deleteAlert(id) {
+  if (!confirm('Delete this alert?')) return;
+  await authFetch(`/api/alerts/${id}`, { method: 'DELETE' });
+  loadAlerts();
+}
+
+// ── Admin Stats ────────────────────────────────────────────────────────────
+let _adminChart = null;
+
+async function loadAdminStats() {
+  try {
+    const r = await authFetch('/api/admin/stats');
+    const d = await r.json();
+    const grid = document.getElementById('admin-stat-grid');
+    grid.innerHTML = `
+      <div class="stat-card"><div class="stat-value">${d.total_queries.toLocaleString()}</div><div class="stat-label">Total Queries</div></div>
+      <div class="stat-card"><div class="stat-value">${d.total_nl_queries.toLocaleString()}</div><div class="stat-label">AI Queries</div></div>
+      <div class="stat-card"><div class="stat-value">${d.total_users.toLocaleString()}</div><div class="stat-label">Active Users</div></div>
+      <div class="stat-card"><div class="stat-value">${d.errors.toLocaleString()}</div><div class="stat-label">Errors</div></div>
+    `;
+
+    const hourly = d.queries_by_hour || {};
+    const labels = Object.keys(hourly).sort().slice(-24);
+    const values = labels.map(k => hourly[k]);
+
+    if (_adminChart) _adminChart.destroy();
+    const ctx = document.getElementById('admin-chart').getContext('2d');
+    _adminChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels.map(l => l.slice(11, 16)),
+        datasets: [{ label: 'Queries', data: values, backgroundColor: 'rgba(124,92,252,0.5)', borderColor: '#7c5cfc', borderWidth: 1 }],
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#585b70', font: { size: 9 } }, grid: { color: '#313244' } },
+          y: { ticks: { color: '#585b70', font: { size: 9 } }, grid: { color: '#313244' }, beginAtZero: true },
+        },
+      },
+    });
+  } catch(e) {
+    document.getElementById('admin-stat-grid').innerHTML = `<div style="color:#f38ba8;">${e.message}</div>`;
+  }
+}
+
+// ── Keyboard Shortcuts ─────────────────────────────────────────────────────
+function showKeyboardShortcuts() {
+  document.getElementById('kbd-modal').classList.add('open');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === '?' || e.key === '/') { e.preventDefault(); showKeyboardShortcuts(); }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open'));
+    closeInsightPanel();
+    hideAC();
+  }
+  if (e.ctrlKey && e.key === 'e') { e.preventDefault(); document.getElementById('sql-editor').focus(); switchTab('sql'); }
+  if (e.ctrlKey && e.key === 's' && currentResults) { e.preventDefault(); saveCurrentQuery(); }
+  if (e.key === 'F5') { e.preventDefault(); refreshNavTables(); }
+});
+
+// ── Onboarding ─────────────────────────────────────────────────────────────
+const ONBOARD_STEPS = [
+  { icon: '⚡', title: 'Welcome to QueryLux!', desc: 'The AI-powered SQL workspace. Connect any database and explore your data using plain English — no SQL expertise required.' },
+  { icon: '🔌', title: 'Connect Your Database', desc: 'Click "+ New Connection" to add SQLite, PostgreSQL, MySQL, DuckDB, or Amazon Redshift. SSH tunnel support included for private VPCs.' },
+  { icon: '💬', title: 'Ask AI in Plain English', desc: 'Type a question like "Show top 10 customers by revenue" and the AI generates, executes, and auto-heals SQL for you.' },
+  { icon: '🗨', title: 'Multi-turn AI Chat', desc: 'Use the "AI Chat" tab for follow-up questions. The AI remembers the conversation context for deeper data exploration.' },
+  { icon: '🗂', title: 'ER Diagram & Schema', desc: 'Visualize table relationships in the ER Diagram tab. Click schema doctor 🩺 for AI-powered database health reports.' },
+  { icon: '🔔', title: 'Scheduled Alerts', desc: 'Set up SQL-based alerts that run hourly, daily, or weekly. Monitor key metrics and get notified when thresholds are crossed.' },
+];
+let _onboardStep = 0;
+
+function showOnboarding() {
+  _onboardStep = 0;
+  renderOnboardStep();
+  document.getElementById('onboarding-modal').classList.add('open');
+}
+
+function renderOnboardStep() {
+  const step = ONBOARD_STEPS[_onboardStep];
+  document.getElementById('onboard-content').innerHTML = `
+    <div class="onboard-step">
+      <div class="onboard-icon">${step.icon}</div>
+      <div class="onboard-title">${step.title}</div>
+      <div class="onboard-desc">${step.desc}</div>
+    </div>`;
+  const dots = document.getElementById('onboard-dots');
+  dots.innerHTML = ONBOARD_STEPS.map((_, i) => `<div class="onboard-dot ${i===_onboardStep?'active':''}"></div>`).join('');
+  document.getElementById('onboard-prev-btn').style.visibility = _onboardStep === 0 ? 'hidden' : 'visible';
+  document.getElementById('onboard-next-btn').textContent = _onboardStep === ONBOARD_STEPS.length - 1 ? '🚀 Get Started' : 'Next →';
+}
+
+function onboardNav(dir) {
+  _onboardStep += dir;
+  if (_onboardStep >= ONBOARD_STEPS.length) { closeOnboarding(); return; }
+  _onboardStep = Math.max(0, _onboardStep);
+  renderOnboardStep();
+}
+
+function closeOnboarding() {
+  document.getElementById('onboarding-modal').classList.remove('open');
+  localStorage.setItem('querylux_onboarded', '1');
+}
+
+// Show onboarding for first-time users
+setTimeout(() => {
+  if (!localStorage.getItem('querylux_onboarded')) showOnboarding();
+}, 1500);
+
+// ── Extend selectConnection to load autocomplete ───────────────────────────
+const _origSelectConn = selectConnection;
+selectConnection = async function(connId, expand) {
+  await _origSelectConn(connId, expand);
+  if (connId) { loadAutocomplete(); if (currentTab === 'chat') initChat(); }
+};
+
+// Setup autocomplete after DOM ready
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(setupAutocomplete, 500);
+});
+
+// runSQL already reads from sql-editor and sets _currentSQL internally.
 </script>
 </body>
 </html>

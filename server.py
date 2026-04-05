@@ -3,17 +3,28 @@ DBeaver-style SQL Agent — connect to any DB, query with natural language.
 Supports: SQLite, PostgreSQL, MySQL/MariaDB
 """
 
+import base64
+import collections
 import csv
 import datetime
+import hashlib
 import io
 import json
 import logging
 import os
 import re
 import sqlite3
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
+
+# Encryption for stored passwords
+try:
+    from cryptography.fernet import Fernet
+    _CRYPTO_OK = True
+except ImportError:
+    _CRYPTO_OK = False
 
 # SSH tunnel support (imported lazily to avoid hard crash if not installed)
 try:
@@ -39,11 +50,57 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 # ── Config ───────────────────────────────────────────────────────────────────
-DATA_DIR   = Path(os.environ.get("DATA_DIR", "."))
+DATA_DIR    = Path(os.environ.get("DATA_DIR", "."))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-MODEL      = "llama-3.3-70b-versatile"
-MAX_TOKENS = 2048
+MODEL       = "llama-3.3-70b-versatile"
+MAX_TOKENS  = 2048
 MAX_RETRIES = 3
+PAGE_SIZE   = 500   # rows per page in results
+
+# ── Encryption key for stored passwords ──────────────────────────────────────
+def _get_fernet():
+    if not _CRYPTO_OK:
+        return None
+    key_file = DATA_DIR / ".enc_key"
+    if key_file.exists():
+        key = key_file.read_bytes()
+    else:
+        key = Fernet.generate_key()
+        key_file.write_bytes(key)
+        key_file.chmod(0o600)
+    return Fernet(key)
+
+_fernet = _get_fernet()
+
+def _encrypt(val: str) -> str:
+    if _fernet and val:
+        return "enc:" + _fernet.encrypt(val.encode()).decode()
+    return val
+
+def _decrypt(val: str) -> str:
+    if _fernet and val and val.startswith("enc:"):
+        try:
+            return _fernet.decrypt(val[4:].encode()).decode()
+        except Exception:
+            return ""
+    return val
+
+# ── Rate limiter ──────────────────────────────────────────────────────────────
+_rate_buckets: dict[str, collections.deque] = {}
+
+def _check_rate(uid: str, key: str = "ai", limit: int = 30, window: int = 60) -> bool:
+    """Return True if allowed, False if rate-limited. limit req per window seconds."""
+    bucket_key = f"{uid}:{key}"
+    now = time.time()
+    if bucket_key not in _rate_buckets:
+        _rate_buckets[bucket_key] = collections.deque()
+    dq = _rate_buckets[bucket_key]
+    while dq and dq[0] < now - window:
+        dq.popleft()
+    if len(dq) >= limit:
+        return False
+    dq.append(now)
+    return True
 
 # ── Firebase Admin init ───────────────────────────────────────────────────────
 import firebase_admin
@@ -177,17 +234,34 @@ def _connections_file(uid: str) -> Path:
 
 
 def _save_connections(uid: str):
-    _STRIP = {"password", "ssh_password", "ssh_private_key"}
+    """Save connections, encrypting sensitive fields."""
+    _ENCRYPT_FIELDS = {"password", "ssh_password", "ssh_private_key"}
     conns = _connections.get(uid, {})
-    safe  = {cid: {k: v for k, v in cfg.items() if k not in _STRIP}
-             for cid, cfg in conns.items()}
-    _connections_file(uid).write_text(json.dumps(safe, indent=2))
+    out = {}
+    for cid, cfg in conns.items():
+        row = {}
+        for k, v in cfg.items():
+            if k in _ENCRYPT_FIELDS and v:
+                row[k] = _encrypt(str(v))
+            else:
+                row[k] = v
+        out[cid] = row
+    _connections_file(uid).write_text(json.dumps(out, indent=2))
 
 
 def _load_connections(uid: str):
+    """Load connections, decrypting sensitive fields."""
     f = _connections_file(uid)
     if f.exists():
-        data = json.loads(f.read_text())
+        try:
+            data = json.loads(f.read_text())
+        except Exception:
+            return
+        _DECRYPT_FIELDS = {"password", "ssh_password", "ssh_private_key"}
+        for cid, cfg in data.items():
+            for k in _DECRYPT_FIELDS:
+                if k in cfg and cfg[k]:
+                    cfg[k] = _decrypt(cfg[k])
         _connections.setdefault(uid, {}).update(data)
 
 
@@ -680,13 +754,28 @@ async def _llm_sse(system: str, user: str, max_tokens: int = 1024):
     yield "data: [DONE]\n\n"
 
 
-# ── Query history (in-memory, last 100 per connection) ───────────────────────
+# ── Query history (persisted to disk) ────────────────────────────────────────
 _history: dict[str, dict[str, list]] = {}
+
+
+def _history_file(uid: str) -> Path:
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", uid)
+    return DATA_DIR / f"history_{safe}.json"
+
+
+def _load_history(uid: str):
+    f = _history_file(uid)
+    if f.exists():
+        try:
+            _history[uid] = json.loads(f.read_text())
+        except Exception:
+            _history[uid] = {}
 
 
 def _user_history(uid: str) -> dict[str, list]:
     if uid not in _history:
         _history[uid] = {}
+        _load_history(uid)
     return _history[uid]
 
 
@@ -702,6 +791,10 @@ def _push_history(uid: str, conn_id: str, question: str, sql: str, row_count: in
         "ts": datetime.datetime.utcnow().isoformat() + "Z",
     })
     h[conn_id] = h[conn_id][:100]
+    try:
+        _history_file(uid).write_text(json.dumps(h, indent=2))
+    except Exception:
+        pass
 
 
 # ── Saved queries (persisted to disk) ────────────────────────────────────────
@@ -733,8 +826,24 @@ def _persist_saved(uid: str):
     _saved_file(uid).write_text(json.dumps(_user_saved(uid), indent=2))
 
 
-# ── Shared results (in-memory, 7-day expiry) ─────────────────────────────────
+# ── Shared results (persisted to disk) ───────────────────────────────────────
 _shares: dict[str, dict] = {}
+_SHARES_FILE = DATA_DIR / "shares.json"
+
+
+def _load_shares():
+    if _SHARES_FILE.exists():
+        try:
+            _shares.update(json.loads(_SHARES_FILE.read_text()))
+        except Exception:
+            pass
+
+
+def _save_shares():
+    try:
+        _SHARES_FILE.write_text(json.dumps(_shares, indent=2))
+    except Exception:
+        pass
 
 
 def _cleanup_shares():
@@ -743,6 +852,47 @@ def _cleanup_shares():
                if (now - datetime.datetime.fromisoformat(v["created_at"])).days >= 7]
     for k in expired:
         del _shares[k]
+    if expired:
+        _save_shares()
+
+
+# ── Admin stats (in-memory counters) ─────────────────────────────────────────
+_admin_stats: dict = {
+    "total_queries": 0,
+    "total_nl_queries": 0,
+    "total_users": set(),
+    "queries_by_hour": collections.defaultdict(int),
+    "errors": 0,
+}
+
+def _track(uid: str, kind: str = "query", error: bool = False):
+    _admin_stats["total_queries"] += 1
+    _admin_stats["total_users"].add(uid)
+    if kind == "nl":
+        _admin_stats["total_nl_queries"] += 1
+    if error:
+        _admin_stats["errors"] += 1
+    hour = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:00")
+    _admin_stats["queries_by_hour"][hour] += 1
+
+# ── Scheduled alerts ──────────────────────────────────────────────────────────
+_alerts: dict[str, dict[str, dict]] = {}   # uid -> alert_id -> alert config
+_ALERTS_FILE = DATA_DIR / "alerts.json"
+
+
+def _load_alerts():
+    if _ALERTS_FILE.exists():
+        try:
+            _alerts.update(json.loads(_ALERTS_FILE.read_text()))
+        except Exception:
+            pass
+
+
+def _save_alerts():
+    try:
+        _ALERTS_FILE.write_text(json.dumps(_alerts, indent=2))
+    except Exception:
+        pass
 
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
@@ -782,7 +932,8 @@ def _seed_user_demos(uid: str):
 @app.on_event("startup")
 async def startup():
     Path("static").mkdir(exist_ok=True)
-    # Pre-seed the dev-user demo connections (used when auth is disabled)
+    _load_shares()
+    _load_alerts()
     _seed_user_demos("dev-user")
 
 
@@ -1013,16 +1164,28 @@ async def get_schema(request: Request, conn_id: str):
 
 class ExecuteRequest(BaseModel):
     sql: str
+    page: int = 1
 
 @app.post("/api/connections/{conn_id}/execute")
 async def execute_sql(request: Request, conn_id: str, req: ExecuteRequest):
     uid = await _get_uid(request)
     try:
         columns, rows = _execute_sql(conn_id, req.sql, uid)
-        return {"columns": columns, "rows": rows}
+        _track(uid, "query")
+        total = len(rows)
+        page  = max(1, req.page)
+        start = (page - 1) * PAGE_SIZE
+        page_rows = rows[start:start + PAGE_SIZE]
+        return {
+            "columns": columns, "rows": page_rows,
+            "total": total, "page": page,
+            "page_size": PAGE_SIZE,
+            "total_pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE),
+        }
     except HTTPException:
         raise
     except Exception as e:
+        _track(uid, "query", error=True)
         return {"error": str(e)}
 
 
@@ -1164,6 +1327,10 @@ async def ws_query(websocket: WebSocket, conn_id: str):
                 await send({"type": "failed", "message": f"Invalid token: {e}"})
                 return
 
+        if not _check_rate(uid, "ai"):
+            await send({"type": "failed", "message": "Rate limit: 30 AI requests per minute"})
+            return
+
         cfg = _user_conns(uid).get(conn_id)
         if not cfg:
             await send({"type": "failed", "message": "Connection not found"})
@@ -1284,6 +1451,8 @@ QUERY WRITING GUIDELINES:
 @app.get("/api/connections/{conn_id}/explain/{table}")
 async def explain_table(request: Request, conn_id: str, table: str):
     uid = await _get_uid(request)
+    if not _check_rate(uid, "ai"):
+        raise HTTPException(status_code=429, detail="Rate limit: 30 AI requests per minute")
     cfg = _user_conns(uid).get(conn_id, {})
     db_type = cfg.get("type", "sqlite")
     try:
@@ -1320,6 +1489,8 @@ Explain this table clearly."""
 @app.get("/api/connections/{conn_id}/suggest")
 async def suggest_queries(request: Request, conn_id: str):
     uid = await _get_uid(request)
+    if not _check_rate(uid, "ai"):
+        raise HTTPException(status_code=429, detail="Rate limit: 30 AI requests per minute")
     cfg = _user_conns(uid).get(conn_id, {})
     db_type = cfg.get("type", "sqlite")
     try:
@@ -1407,7 +1578,9 @@ class StoryRequest(BaseModel):
 
 @app.post("/api/connections/{conn_id}/story")
 async def ai_story(request: Request, conn_id: str, req: StoryRequest):
-    await _get_uid(request)
+    uid = await _get_uid(request)
+    if not _check_rate(uid, "ai"):
+        raise HTTPException(status_code=429, detail="Rate limit: 30 AI requests per minute")
     header   = " | ".join(req.columns)
     data_str = "\n".join(" | ".join(str(v) for v in row) for row in req.rows[:25])
     system   = """\
@@ -1433,6 +1606,8 @@ class OptimizeRequest(BaseModel):
 @app.post("/api/connections/{conn_id}/optimize")
 async def optimize_query(request: Request, conn_id: str, req: OptimizeRequest):
     uid     = await _get_uid(request)
+    if not _check_rate(uid, "ai"):
+        raise HTTPException(status_code=429, detail="Rate limit: 30 AI requests per minute")
     cfg     = _user_conns(uid).get(conn_id, {})
     db_type = cfg.get("type", "sqlite")
     try:
@@ -1461,6 +1636,8 @@ async def optimize_query(request: Request, conn_id: str, req: OptimizeRequest):
 @app.get("/api/connections/{conn_id}/schema-doctor")
 async def schema_doctor(request: Request, conn_id: str):
     uid = await _get_uid(request)
+    if not _check_rate(uid, "ai"):
+        raise HTTPException(status_code=429, detail="Rate limit: 30 AI requests per minute")
     cfg = _user_conns(uid).get(conn_id, {})
     db_type = cfg.get("type", "sqlite")
     try:
@@ -1492,6 +1669,8 @@ class GenerateAPIRequest(BaseModel):
 @app.post("/api/connections/{conn_id}/generate-api")
 async def generate_api(request: Request, conn_id: str, req: GenerateAPIRequest):
     uid     = await _get_uid(request)
+    if not _check_rate(uid, "ai"):
+        raise HTTPException(status_code=429, detail="Rate limit: 30 AI requests per minute")
     cfg     = _user_conns(uid).get(conn_id, {})
     db_type = cfg.get("type", "sqlite")
     fws = {"fastapi": "FastAPI (Python) with psycopg2/sqlite3",
@@ -1638,6 +1817,246 @@ async def get_share(share_id: str):
 @app.get("/share/{share_id}")
 async def serve_share_page(share_id: str):
     return FileResponse("static/index.html")
+
+
+# ── Admin stats ──────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/stats")
+async def admin_stats(request: Request):
+    uid = await _get_uid(request)
+    stats = _admin_stats.copy()
+    stats["total_users"] = len(stats["total_users"])
+    # Keep only last 24 hours of hourly data
+    now = datetime.datetime.utcnow()
+    cutoff = (now - datetime.timedelta(hours=23)).strftime("%Y-%m-%d %H:00")
+    stats["queries_by_hour"] = {
+        k: v for k, v in stats["queries_by_hour"].items() if k >= cutoff
+    }
+    stats["uid"] = uid
+    return stats
+
+
+# ── Multi-turn AI Chat WebSocket ──────────────────────────────────────────────
+
+@app.websocket("/ws/chat/{conn_id}")
+async def ws_chat(websocket: WebSocket, conn_id: str):
+    await websocket.accept()
+
+    async def send(obj: dict):
+        await websocket.send_text(json.dumps(obj))
+
+    uid = "dev-user"
+    if _firebase_enabled():
+        try:
+            init_msg = json.loads(await websocket.receive_text())
+            token = init_msg.get("token", "")
+            if not token:
+                await send({"type": "error", "message": "Unauthorized"})
+                return
+            decoded = fb_auth.verify_id_token(token)
+            uid = decoded["uid"]
+        except Exception as e:
+            await send({"type": "error", "message": f"Auth failed: {e}"})
+            return
+    else:
+        # dev mode: skip auth handshake
+        await websocket.receive_text()  # consume init message
+
+    cfg = _user_conns(uid).get(conn_id, {})
+    db_type = cfg.get("type", "sqlite")
+    try:
+        schema = _rich_schema_for_llm(conn_id, uid)
+    except Exception:
+        schema = "Schema unavailable"
+
+    system = f"""\
+You are a helpful data analyst with access to a {db_type.upper()} database.
+You help users explore and understand their data through conversation.
+When asked to write SQL, wrap it in ```sql code blocks.
+Be concise, friendly, and data-driven. Reference actual schema details.
+
+Schema:
+{schema}"""
+
+    conversation: list[dict] = []
+    await send({"type": "ready", "message": "Chat ready"})
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            payload = json.loads(raw)
+            user_msg = payload.get("message", "").strip()
+            if not user_msg:
+                continue
+
+            if not _check_rate(uid, "ai"):
+                await send({"type": "error", "message": "Rate limit: 30 AI requests per minute"})
+                continue
+
+            conversation.append({"role": "user", "content": user_msg})
+            # Keep last 20 turns (10 exchanges)
+            if len(conversation) > 20:
+                conversation = conversation[-20:]
+
+            _track(uid, "nl")
+
+            client = groq.AsyncGroq(api_key=GROQ_KEY)
+            messages = [{"role": "system", "content": system}] + conversation
+            full_reply = ""
+            try:
+                stream = await client.chat.completions.create(
+                    model=GROQ_MODEL,
+                    messages=messages,
+                    max_tokens=800,
+                    stream=True,
+                )
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta.content or ""
+                    if delta:
+                        full_reply += delta
+                        await send({"type": "delta", "content": delta})
+
+                conversation.append({"role": "assistant", "content": full_reply})
+                await send({"type": "done"})
+            except Exception as e:
+                await send({"type": "error", "message": str(e)})
+    except Exception:
+        pass
+
+
+# ── Scheduled Alerts endpoints ────────────────────────────────────────────────
+
+class AlertRequest(BaseModel):
+    name: str
+    conn_id: str
+    sql: str
+    condition: str = "always"   # always | gt | lt | eq | not_empty | empty
+    threshold: float = 0
+    schedule: str = "hourly"    # hourly | daily | weekly
+    notify_email: str = ""
+
+
+@app.get("/api/alerts")
+async def get_alerts(request: Request):
+    uid = await _get_uid(request)
+    return list(_alerts.get(uid, {}).values())
+
+
+@app.post("/api/alerts")
+async def create_alert(request: Request, req: AlertRequest):
+    uid = await _get_uid(request)
+    alert_id = str(uuid.uuid4())
+    alert = {
+        "id": alert_id,
+        "name": req.name,
+        "conn_id": req.conn_id,
+        "sql": req.sql,
+        "condition": req.condition,
+        "threshold": req.threshold,
+        "schedule": req.schedule,
+        "notify_email": req.notify_email,
+        "enabled": True,
+        "last_run": None,
+        "last_result": None,
+        "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+    _alerts.setdefault(uid, {})[alert_id] = alert
+    _save_alerts()
+    return alert
+
+
+@app.delete("/api/alerts/{alert_id}")
+async def delete_alert(request: Request, alert_id: str):
+    uid = await _get_uid(request)
+    if uid in _alerts and alert_id in _alerts[uid]:
+        del _alerts[uid][alert_id]
+        _save_alerts()
+    return {"deleted": alert_id}
+
+
+@app.post("/api/alerts/{alert_id}/toggle")
+async def toggle_alert(request: Request, alert_id: str):
+    uid = await _get_uid(request)
+    alert = _alerts.get(uid, {}).get(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    alert["enabled"] = not alert["enabled"]
+    _save_alerts()
+    return alert
+
+
+@app.post("/api/alerts/{alert_id}/run")
+async def run_alert_now(request: Request, alert_id: str):
+    uid = await _get_uid(request)
+    alert = _alerts.get(uid, {}).get(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    try:
+        cols, rows = _execute_sql(alert["conn_id"], alert["sql"], uid)
+        value = rows[0][0] if rows and rows[0] else None
+        alert["last_run"] = datetime.datetime.utcnow().isoformat() + "Z"
+        alert["last_result"] = {"value": value, "columns": cols, "rows": rows[:5]}
+        _save_alerts()
+        return {"value": value, "columns": cols, "rows": rows[:5], "triggered": True}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── Schema autocomplete endpoint ──────────────────────────────────────────────
+
+@app.get("/api/connections/{conn_id}/autocomplete")
+async def autocomplete(request: Request, conn_id: str):
+    uid = await _get_uid(request)
+    try:
+        schema = _get_schema(conn_id, uid)
+    except Exception:
+        return {"tables": [], "columns": []}
+    tables = [t["table"] for t in schema]
+    columns = []
+    for t in schema:
+        for c in t.get("columns", []):
+            columns.append({"table": t["table"], "column": c["name"], "type": c.get("type", "")})
+    return {"tables": tables, "columns": columns}
+
+
+# ── ER Diagram endpoint ───────────────────────────────────────────────────────
+
+@app.get("/api/connections/{conn_id}/er-diagram")
+async def er_diagram(request: Request, conn_id: str):
+    uid = await _get_uid(request)
+    try:
+        schema = _get_schema(conn_id, uid)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not read schema")
+
+    tables = []
+    for t in schema:
+        tables.append({
+            "name": t["table"],
+            "columns": t.get("columns", []),
+            "row_count": t.get("row_count", 0),
+        })
+
+    # Detect FK relationships by column name heuristics
+    table_names = {t["name"] for t in tables}
+    relationships = []
+    for t in tables:
+        for c in t["columns"]:
+            col = c["name"].lower()
+            # Match patterns: other_table_id, other_table_fk, fk_other_table
+            for candidate in table_names:
+                cand_lower = candidate.lower()
+                if candidate == t["name"]:
+                    continue
+                if col == f"{cand_lower}_id" or col == f"{cand_lower}_fk" or col == f"fk_{cand_lower}":
+                    relationships.append({
+                        "from_table": t["name"],
+                        "from_col": c["name"],
+                        "to_table": candidate,
+                        "to_col": "id",
+                    })
+
+    return {"tables": tables, "relationships": relationships}
 
 
 # ── Firebase public config (safe to expose) ───────────────────────────────────
