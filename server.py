@@ -4,6 +4,7 @@ Supports: SQLite, PostgreSQL, MySQL/MariaDB
 """
 
 import csv
+import datetime
 import io
 import json
 import logging
@@ -34,7 +35,7 @@ if _env_file.exists():
 from groq import AsyncGroq
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 # ── Config ───────────────────────────────────────────────────────────────────
@@ -651,6 +652,99 @@ def _extract_sql(text: str) -> str:
     return text.strip()
 
 
+# ── LLM helpers ──────────────────────────────────────────────────────────────
+
+async def _llm(system: str, user: str, max_tokens: int = 1024) -> str:
+    """Single non-streaming LLM call."""
+    client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY", ""))
+    resp = await client.chat.completions.create(
+        model=MODEL, max_tokens=max_tokens,
+        messages=[{"role": "system", "content": system},
+                  {"role": "user",   "content": user}],
+    )
+    return resp.choices[0].message.content or ""
+
+
+async def _llm_sse(system: str, user: str, max_tokens: int = 1024):
+    """Async generator yielding SSE-formatted chunks for StreamingResponse."""
+    client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY", ""))
+    stream = await client.chat.completions.create(
+        model=MODEL, max_tokens=max_tokens, stream=True,
+        messages=[{"role": "system", "content": system},
+                  {"role": "user",   "content": user}],
+    )
+    async for chunk in stream:
+        text = chunk.choices[0].delta.content or ""
+        if text:
+            yield f"data: {json.dumps({'text': text})}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+# ── Query history (in-memory, last 100 per connection) ───────────────────────
+_history: dict[str, dict[str, list]] = {}
+
+
+def _user_history(uid: str) -> dict[str, list]:
+    if uid not in _history:
+        _history[uid] = {}
+    return _history[uid]
+
+
+def _push_history(uid: str, conn_id: str, question: str, sql: str, row_count: int):
+    h = _user_history(uid)
+    if conn_id not in h:
+        h[conn_id] = []
+    h[conn_id].insert(0, {
+        "id": str(uuid.uuid4()),
+        "question": question,
+        "sql": sql,
+        "row_count": row_count,
+        "ts": datetime.datetime.utcnow().isoformat() + "Z",
+    })
+    h[conn_id] = h[conn_id][:100]
+
+
+# ── Saved queries (persisted to disk) ────────────────────────────────────────
+_saved: dict[str, dict[str, list]] = {}
+
+
+def _saved_file(uid: str) -> Path:
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", uid)
+    return DATA_DIR / f"saved_{safe}.json"
+
+
+def _load_saved(uid: str):
+    f = _saved_file(uid)
+    if f.exists():
+        try:
+            _saved[uid] = json.loads(f.read_text())
+        except Exception:
+            pass
+
+
+def _user_saved(uid: str) -> dict[str, list]:
+    if uid not in _saved:
+        _saved[uid] = {}
+        _load_saved(uid)
+    return _saved[uid]
+
+
+def _persist_saved(uid: str):
+    _saved_file(uid).write_text(json.dumps(_user_saved(uid), indent=2))
+
+
+# ── Shared results (in-memory, 7-day expiry) ─────────────────────────────────
+_shares: dict[str, dict] = {}
+
+
+def _cleanup_shares():
+    now = datetime.datetime.utcnow()
+    expired = [k for k, v in _shares.items()
+               if (now - datetime.datetime.fromisoformat(v["created_at"])).days >= 7]
+    for k in expired:
+        del _shares[k]
+
+
 # ── FastAPI ───────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="SQL Agent — DBeaver Style")
@@ -1163,6 +1257,7 @@ QUERY WRITING GUIDELINES:
 
             try:
                 columns, rows = _execute_sql(conn_id, sql, uid)
+                _push_history(uid, conn_id, question, sql, len(rows))
                 await send({
                     "type": "result", "sql": sql,
                     "columns": columns, "rows": rows, "attempts": attempt,
@@ -1182,6 +1277,367 @@ QUERY WRITING GUIDELINES:
             await send({"type": "failed", "message": str(e)})
         except Exception:
             pass
+
+
+# ── Explain table (streaming) ────────────────────────────────────────────────
+
+@app.get("/api/connections/{conn_id}/explain/{table}")
+async def explain_table(request: Request, conn_id: str, table: str):
+    uid = await _get_uid(request)
+    cfg = _user_conns(uid).get(conn_id, {})
+    db_type = cfg.get("type", "sqlite")
+    try:
+        schema = _rich_schema_for_llm(conn_id, uid)
+    except Exception:
+        schema = "Schema unavailable"
+    tbl_list = _get_schema(conn_id, uid)
+    tbl_info = next((t for t in tbl_list if t["table"] == table), {})
+    cols = ", ".join(f"{c['name']} ({c['type']})" for c in tbl_info.get("columns", []))
+    row_count = tbl_info.get("row_count", "?")
+    system = """\
+You are a database expert explaining tables to a business analyst.
+Use markdown with these sections:
+## Purpose
+## Key Columns
+## Relationships
+## Common Use Cases
+## Data Insights
+Be concise but insightful. Focus on business meaning, not just technical details."""
+    user = f"""Database: {db_type.upper()}
+Table: {table} ({row_count:,} rows)
+Columns: {cols}
+
+Full schema context:
+{schema}
+
+Explain this table clearly."""
+    return StreamingResponse(_llm_sse(system, user, max_tokens=800),
+                             media_type="text/event-stream")
+
+
+# ── Suggest starter queries ───────────────────────────────────────────────────
+
+@app.get("/api/connections/{conn_id}/suggest")
+async def suggest_queries(request: Request, conn_id: str):
+    uid = await _get_uid(request)
+    cfg = _user_conns(uid).get(conn_id, {})
+    db_type = cfg.get("type", "sqlite")
+    try:
+        schema = _rich_schema_for_llm(conn_id, uid)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to read schema")
+    system = ("You are a data analyst. Generate useful natural-language questions "
+              "answerable by querying this database. Output ONLY a JSON array of strings.")
+    user = (f"Database: {db_type.upper()}\n\nSchema:\n{schema}\n\n"
+            "Generate exactly 8 useful, varied questions covering: aggregations, trends, "
+            "rankings, comparisons, lookups. Return JSON array only.")
+    text = await _llm(system, user, max_tokens=600)
+    try:
+        m = re.search(r'\[.*?\]', text, re.DOTALL)
+        questions = json.loads(m.group(0)) if m else []
+    except Exception:
+        questions = []
+    return {"questions": questions[:8]}
+
+
+# ── Data quality scan ─────────────────────────────────────────────────────────
+
+@app.get("/api/connections/{conn_id}/quality/{table}")
+async def data_quality(request: Request, conn_id: str, table: str):
+    uid = await _get_uid(request)
+    cfg = _user_conns(uid).get(conn_id, {})
+    t   = cfg.get("type", "sqlite")
+    schema = _get_schema(conn_id, uid)
+    tbl_info = next((s for s in schema if s["table"] == table), None)
+    if not tbl_info:
+        raise HTTPException(status_code=404, detail="Table not found")
+    columns   = [c["name"] for c in tbl_info["columns"]]
+    row_count = tbl_info["row_count"]
+    stats, issues = [], []
+
+    def q(col: str, template: str) -> str:
+        if t == "sqlite":
+            return template.format(t=f"[{table}]", c=f"[{col}]")
+        elif t in ("postgresql", "redshift", "duckdb"):
+            return template.format(t=f'"{table}"', c=f'"{col}"')
+        else:
+            return template.format(t=f"`{table}`", c=f"`{col}`")
+
+    for col in columns:
+        try:
+            _, nr = _execute_sql(conn_id, q(col, "SELECT COUNT(*) FROM {t} WHERE {c} IS NULL"), uid)
+            null_count = nr[0][0] if nr else 0
+            null_pct   = round(100 * null_count / row_count, 1) if row_count else 0
+            _, dr = _execute_sql(conn_id, q(col, "SELECT COUNT(*) - COUNT(DISTINCT {c}) FROM {t}"), uid)
+            dup_count = dr[0][0] if dr else 0
+            stats.append({"column": col, "null_count": null_count,
+                          "null_pct": null_pct, "duplicate_values": dup_count})
+            if null_pct > 50:
+                issues.append({"severity": "high", "column": col,
+                               "issue": f"{null_pct}% NULL — column may be unused or data missing"})
+            elif null_pct > 10:
+                issues.append({"severity": "medium", "column": col,
+                               "issue": f"{null_pct}% NULL — verify if expected"})
+            if dup_count > 0 and any(col.lower().endswith(s)
+                                     for s in ("id", "uuid", "email", "code", "key")):
+                issues.append({"severity": "high", "column": col,
+                               "issue": f"{dup_count} duplicates in what looks like a unique field"})
+        except Exception:
+            pass
+
+    if row_count == 0:
+        issues.append({"severity": "high", "column": None, "issue": "Table is empty"})
+
+    return {
+        "table": table, "row_count": row_count,
+        "column_count": len(columns), "stats": stats, "issues": issues,
+        "score": max(0, 100 - len([i for i in issues if i["severity"] == "high"]) * 15
+                     - len([i for i in issues if i["severity"] == "medium"]) * 5),
+    }
+
+
+# ── AI Data Story (streaming) ─────────────────────────────────────────────────
+
+class StoryRequest(BaseModel):
+    question: str
+    sql: str
+    columns: list
+    rows: list
+
+
+@app.post("/api/connections/{conn_id}/story")
+async def ai_story(request: Request, conn_id: str, req: StoryRequest):
+    await _get_uid(request)
+    header   = " | ".join(req.columns)
+    data_str = "\n".join(" | ".join(str(v) for v in row) for row in req.rows[:25])
+    system   = """\
+You are a senior data analyst writing a business intelligence insight report.
+Given query results, write a concise markdown narrative.
+## Key Findings  (3-5 bullet points with specific numbers)
+## Trend or Pattern  (what stands out)
+## Recommendation  (one actionable next step)
+Max 250 words. Be specific, use the actual data values."""
+    user = (f"Question: {req.question}\nSQL: {req.sql}\n"
+            f"Total rows: {len(req.rows)}\n\nSample data:\n{header}\n{data_str}\n\n"
+            "Write the business narrative.")
+    return StreamingResponse(_llm_sse(system, user, max_tokens=600),
+                             media_type="text/event-stream")
+
+
+# ── Optimize SQL ──────────────────────────────────────────────────────────────
+
+class OptimizeRequest(BaseModel):
+    sql: str
+
+
+@app.post("/api/connections/{conn_id}/optimize")
+async def optimize_query(request: Request, conn_id: str, req: OptimizeRequest):
+    uid     = await _get_uid(request)
+    cfg     = _user_conns(uid).get(conn_id, {})
+    db_type = cfg.get("type", "sqlite")
+    try:
+        schema = _rich_schema_for_llm(conn_id, uid)
+    except Exception:
+        schema = ""
+    system = (f"You are a SQL performance expert for {db_type.upper()}. "
+              "Respond ONLY with JSON: "
+              '{"issues":[],"suggestions":[],"optimized_sql":"","explanation":""}')
+    user   = f"DB: {db_type.upper()}\nSchema:\n{schema}\n\nQuery:\n{req.sql}"
+    text   = await _llm(system, user, max_tokens=1000)
+    try:
+        m      = re.search(r'\{.*\}', text, re.DOTALL)
+        result = json.loads(m.group(0)) if m else {}
+    except Exception:
+        result = {}
+    result.setdefault("issues", [])
+    result.setdefault("suggestions", [])
+    result.setdefault("optimized_sql", req.sql)
+    result.setdefault("explanation", text)
+    return result
+
+
+# ── Schema Doctor (streaming) ─────────────────────────────────────────────────
+
+@app.get("/api/connections/{conn_id}/schema-doctor")
+async def schema_doctor(request: Request, conn_id: str):
+    uid = await _get_uid(request)
+    cfg = _user_conns(uid).get(conn_id, {})
+    db_type = cfg.get("type", "sqlite")
+    try:
+        schema = _rich_schema_for_llm(conn_id, uid)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Schema unavailable")
+    system = """\
+You are a senior database architect. Analyze a schema and give a health report in markdown.
+Use EXACTLY these sections:
+## Schema Health Score: X/100
+## ✅ What's Good
+## ⚠️ Issues Found
+## 🔧 Recommendations
+## 🔑 Missing Indexes Suggested
+## 📊 Normalization Notes
+Be specific: name the tables and columns. Focus on actionable improvements."""
+    user   = f"Database: {db_type.upper()}\n\nFull Schema:\n{schema}\n\nProvide health report."
+    return StreamingResponse(_llm_sse(system, user, max_tokens=1200),
+                             media_type="text/event-stream")
+
+
+# ── Generate API endpoint code ────────────────────────────────────────────────
+
+class GenerateAPIRequest(BaseModel):
+    sql: str
+    framework: str = "fastapi"
+
+
+@app.post("/api/connections/{conn_id}/generate-api")
+async def generate_api(request: Request, conn_id: str, req: GenerateAPIRequest):
+    uid     = await _get_uid(request)
+    cfg     = _user_conns(uid).get(conn_id, {})
+    db_type = cfg.get("type", "sqlite")
+    fws = {"fastapi": "FastAPI (Python) with psycopg2/sqlite3",
+           "express": "Express.js (Node.js) with pg/mysql2",
+           "flask":   "Flask (Python)"}
+    fw = fws.get(req.framework, "FastAPI (Python)")
+    system = (f"Generate a complete, production-ready {fw} REST API endpoint for this SQL query. "
+              "Include error handling, input validation for any parameters, and connection setup. "
+              "Return ONLY the code block, no prose.")
+    user   = f"Database: {db_type.upper()}\nSQL: {req.sql}\nGenerate the {fw} endpoint."
+    code   = await _llm(system, user, max_tokens=1000)
+    return {"code": code, "framework": req.framework}
+
+
+# ── Auto chart suggestion ─────────────────────────────────────────────────────
+
+@app.post("/api/connections/{conn_id}/chart-suggest")
+async def chart_suggest(request: Request, conn_id: str, body: dict = None):
+    await _get_uid(request)
+    if body is None:
+        body = await request.json()
+    columns = body.get("columns", [])
+    rows    = body.get("rows", [])
+    if not columns or not rows:
+        return {"chart_type": "bar", "x": 0, "y": 1, "reason": "Default"}
+
+    # Detect column types from sample data
+    def is_numeric(col_idx):
+        vals = [r[col_idx] for r in rows[:20] if r[col_idx] is not None]
+        return vals and all(isinstance(v, (int, float)) for v in vals)
+
+    def is_date(col_name):
+        n = col_name.lower()
+        return any(k in n for k in ("date", "time", "month", "year", "day", "week"))
+
+    numeric_cols = [i for i in range(len(columns)) if is_numeric(i)]
+    text_cols    = [i for i in range(len(columns)) if i not in numeric_cols]
+    date_cols    = [i for i in text_cols if is_date(columns[i])]
+
+    if date_cols and numeric_cols:
+        return {"chart_type": "line", "x": date_cols[0], "y": numeric_cols[0],
+                "reason": "Date + numeric → time series line chart"}
+    if text_cols and numeric_cols:
+        if len(rows) <= 6:
+            return {"chart_type": "pie", "x": text_cols[0], "y": numeric_cols[0],
+                    "reason": "Few categories → pie chart"}
+        return {"chart_type": "bar", "x": text_cols[0], "y": numeric_cols[0],
+                "reason": "Category + numeric → bar chart"}
+    if len(numeric_cols) >= 2:
+        return {"chart_type": "bar", "x": numeric_cols[0], "y": numeric_cols[1],
+                "reason": "Two numeric columns → bar chart"}
+    return {"chart_type": "bar", "x": 0, "y": min(1, len(columns) - 1), "reason": "Default"}
+
+
+# ── Query history endpoints ───────────────────────────────────────────────────
+
+@app.get("/api/connections/{conn_id}/history")
+async def get_history(request: Request, conn_id: str):
+    uid = await _get_uid(request)
+    return _user_history(uid).get(conn_id, [])
+
+
+@app.delete("/api/connections/{conn_id}/history")
+async def clear_history(request: Request, conn_id: str):
+    uid = await _get_uid(request)
+    _user_history(uid)[conn_id] = []
+    return {"cleared": True}
+
+
+# ── Saved queries endpoints ───────────────────────────────────────────────────
+
+class SaveQueryRequest(BaseModel):
+    name: str
+    sql: str
+    question: str = ""
+
+
+@app.get("/api/connections/{conn_id}/saved")
+async def get_saved(request: Request, conn_id: str):
+    uid = await _get_uid(request)
+    return _user_saved(uid).get(conn_id, [])
+
+
+@app.post("/api/connections/{conn_id}/saved")
+async def save_query(request: Request, conn_id: str, req: SaveQueryRequest):
+    uid = await _get_uid(request)
+    s   = _user_saved(uid)
+    s.setdefault(conn_id, [])
+    entry = {
+        "id": str(uuid.uuid4()),
+        "name": req.name.strip() or "Untitled",
+        "sql": req.sql,
+        "question": req.question,
+        "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+    s[conn_id].insert(0, entry)
+    _persist_saved(uid)
+    return entry
+
+
+@app.delete("/api/connections/{conn_id}/saved/{query_id}")
+async def delete_saved(request: Request, conn_id: str, query_id: str):
+    uid = await _get_uid(request)
+    s   = _user_saved(uid)
+    if conn_id in s:
+        s[conn_id] = [q for q in s[conn_id] if q["id"] != query_id]
+        _persist_saved(uid)
+    return {"deleted": query_id}
+
+
+# ── Share results ─────────────────────────────────────────────────────────────
+
+class ShareRequest(BaseModel):
+    sql: str
+    question: str
+    columns: list
+    rows: list
+    conn_name: str
+
+
+@app.post("/api/share")
+async def create_share(request: Request, req: ShareRequest):
+    uid = await _get_uid(request)
+    _cleanup_shares()
+    share_id = str(uuid.uuid4())[:12]
+    _shares[share_id] = {
+        "sql": req.sql, "question": req.question,
+        "columns": req.columns, "rows": req.rows[:500],
+        "conn_name": req.conn_name,
+        "created_at": datetime.datetime.utcnow().isoformat(),
+        "uid": uid,
+    }
+    return {"share_id": share_id}
+
+
+@app.get("/api/share/{share_id}")
+async def get_share(share_id: str):
+    share = _shares.get(share_id)
+    if not share:
+        raise HTTPException(status_code=404, detail="Share not found or expired (7-day limit)")
+    return share
+
+
+@app.get("/share/{share_id}")
+async def serve_share_page(share_id: str):
+    return FileResponse("static/index.html")
 
 
 # ── Firebase public config (safe to expose) ───────────────────────────────────

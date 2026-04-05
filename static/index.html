@@ -8,6 +8,10 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="/firebase-config.js"></script>
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<!-- Marked (markdown renderer) -->
+<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overflow: hidden; }
@@ -420,6 +424,165 @@
     border-radius: 4px; padding: 3px 9px; font-size: 10px; cursor: pointer; transition: all .15s;
   }
   .btn-export:hover { border-color: #a6e3a1; color: #a6e3a1; }
+
+  /* ── Insight Panel (right slide-in) ── */
+  #insight-panel {
+    position: fixed; right: -480px; top: 0; width: 480px; height: 100%;
+    background: #1e1e2e; border-left: 1px solid #313244;
+    z-index: 300; display: flex; flex-direction: column;
+    transition: right .3s ease; overflow: hidden;
+  }
+  #insight-panel.open { right: 0; }
+  .insight-hdr {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; border-bottom: 1px solid #313244; flex-shrink: 0;
+    background: #181825;
+  }
+  .insight-hdr-title { font-weight: 700; font-size: 13px; color: #cba6f7; }
+  .insight-hdr-actions { display: flex; gap: 6px; align-items: center; }
+  .insight-body {
+    flex: 1; overflow-y: auto; padding: 16px;
+    font-size: 13px; line-height: 1.7; color: #cdd6f4;
+  }
+  .insight-body h2 { font-size: 13px; color: #89b4fa; margin: 14px 0 6px; }
+  .insight-body h3 { font-size: 12px; color: #a6adc8; margin: 10px 0 4px; }
+  .insight-body ul { padding-left: 18px; }
+  .insight-body li { margin: 3px 0; }
+  .insight-body code { background: #313244; border-radius: 3px; padding: 1px 5px; font-size: 11px; }
+  .insight-body pre { background: #181825; border-radius: 6px; padding: 12px; overflow-x: auto; margin: 8px 0; }
+  .insight-body pre code { background: none; padding: 0; font-size: 11px; }
+  .insight-loading { color: #585b70; font-style: italic; padding: 20px 0; }
+
+  /* ── Suggest Banner ── */
+  #suggest-banner {
+    background: linear-gradient(135deg, #1e1e2e 0%, #1a1a2e 100%);
+    border: 1px solid #313244; border-radius: 8px;
+    margin: 8px 12px; padding: 12px; display: none;
+  }
+  .suggest-hdr {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .suggest-hdr-title { font-size: 12px; font-weight: 700; color: #cba6f7; }
+  .suggest-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  }
+  .suggest-chip {
+    background: #24273a; border: 1px solid #313244; border-radius: 6px;
+    padding: 7px 10px; font-size: 11px; color: #a6adc8; cursor: pointer;
+    transition: all .15s; text-align: left; line-height: 1.4;
+  }
+  .suggest-chip:hover { border-color: #cba6f7; color: #cba6f7; background: #2a2a3e; }
+
+  /* ── Chart Panel ── */
+  #chart-panel {
+    border-top: 1px solid #313244; padding: 12px 16px; background: #1e1e2e; display: none;
+  }
+  .chart-controls {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .chart-controls select, .chart-controls input {
+    background: #24273a; border: 1px solid #313244; color: #cdd6f4;
+    border-radius: 4px; padding: 4px 8px; font-size: 11px;
+  }
+  .chart-controls label { font-size: 11px; color: #6c7086; }
+  #chart-canvas-wrap { height: 260px; position: relative; }
+
+  /* ── History / Saved tabs ── */
+  .hist-item, .saved-item {
+    background: #24273a; border: 1px solid #313244; border-radius: 6px;
+    padding: 10px 12px; margin-bottom: 8px; cursor: pointer; transition: border-color .15s;
+  }
+  .hist-item:hover { border-color: #89b4fa; }
+  .saved-item:hover { border-color: #cba6f7; }
+  .hist-sql { font-family: monospace; font-size: 11px; color: #89dceb;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 4px 0; }
+  .hist-meta { font-size: 10px; color: #585b70; display: flex; gap: 10px; }
+  .hist-question { font-size: 12px; color: #cdd6f4; margin-bottom: 3px; }
+  .saved-name { font-size: 12px; font-weight: 600; color: #cba6f7; margin-bottom: 4px; }
+  .saved-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+  /* ── Quality Report ── */
+  .quality-score {
+    font-size: 36px; font-weight: 800; text-align: center; padding: 16px 0 8px;
+  }
+  .quality-score.good  { color: #a6e3a1; }
+  .quality-score.ok    { color: #f9e2af; }
+  .quality-score.poor  { color: #f38ba8; }
+  .quality-issue {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 8px 10px; border-radius: 6px; margin: 6px 0; font-size: 12px;
+  }
+  .quality-issue.high   { background: rgba(243,139,168,.1); border: 1px solid rgba(243,139,168,.3); }
+  .quality-issue.medium { background: rgba(249,226,175,.1); border: 1px solid rgba(249,226,175,.3); }
+  .quality-col-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 11px; }
+  .quality-col-table th { color: #6c7086; padding: 4px 8px; text-align: left; border-bottom: 1px solid #313244; }
+  .quality-col-table td { padding: 5px 8px; border-bottom: 1px solid #1e1e2e; }
+  .null-bar { height: 6px; background: #313244; border-radius: 3px; min-width: 60px; }
+  .null-fill { height: 100%; background: #f38ba8; border-radius: 3px; }
+
+  /* ── Optimize Panel ── */
+  #optimize-panel {
+    background: #24273a; border: 1px solid #313244; border-radius: 6px;
+    margin: 8px 0; padding: 12px; display: none;
+  }
+  .optimize-section { margin-bottom: 10px; }
+  .optimize-label { font-size: 10px; font-weight: 700; color: #6c7086; text-transform: uppercase; margin-bottom: 5px; }
+  .optimize-tag {
+    display: inline-block; background: #313244; border-radius: 4px;
+    padding: 3px 8px; font-size: 11px; color: #fab387; margin: 2px;
+  }
+
+  /* ── API Code Modal ── */
+  #api-modal .modal { width: 680px; max-width: 95vw; }
+  .api-framework-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+  .api-fw-tab {
+    padding: 5px 12px; border-radius: 4px; font-size: 11px; cursor: pointer;
+    border: 1px solid #313244; color: #a6adc8; background: transparent;
+  }
+  .api-fw-tab.active { background: #7c5cfc; border-color: #7c5cfc; color: #fff; }
+  #api-code-block {
+    background: #181825; border-radius: 6px; padding: 14px; overflow-x: auto;
+    font-family: monospace; font-size: 11px; color: #89dceb; max-height: 420px;
+    overflow-y: auto; white-space: pre; line-height: 1.6;
+  }
+
+  /* ── Pivot Table ── */
+  #pivot-panel { padding: 12px 16px; border-top: 1px solid #313244; display: none; }
+  .pivot-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .pivot-controls label { font-size: 11px; color: #6c7086; }
+  .pivot-controls select { background: #24273a; border: 1px solid #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px; font-size: 11px; }
+
+  /* ── Tree action icons ── */
+  .tbl-actions { display: none; gap: 3px; margin-left: auto; }
+  .tree-table-row:hover .tbl-actions { display: flex; }
+  .tbl-action-btn {
+    background: #313244; border: none; color: #a6adc8; border-radius: 3px;
+    padding: 2px 5px; font-size: 10px; cursor: pointer; transition: all .1s; white-space: nowrap;
+  }
+  .tbl-action-btn:hover { background: #45475a; color: #cdd6f4; }
+  .conn-hdr-actions { display: flex; gap: 4px; margin-left: auto; }
+  .conn-hdr-btn {
+    background: transparent; border: none; color: #585b70; font-size: 11px;
+    cursor: pointer; padding: 2px 5px; border-radius: 3px; transition: all .1s;
+  }
+  .conn-hdr-btn:hover { color: #cba6f7; background: #313244; }
+
+  /* ── Results action bar extension ── */
+  .result-actions { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+  .btn-action {
+    background: transparent; border: 1px solid #45475a; color: #a6adc8;
+    border-radius: 4px; padding: 3px 9px; font-size: 10px; cursor: pointer; transition: all .15s;
+  }
+  .btn-action:hover { border-color: #cba6f7; color: #cba6f7; }
+  .btn-action.active { border-color: #cba6f7; color: #cba6f7; background: rgba(203,166,247,.1); }
+
+  /* ── Share Toast ── */
+  .share-link-box {
+    background: #24273a; border: 1px solid #a6e3a1; border-radius: 6px;
+    padding: 10px 12px; margin-top: 10px; font-family: monospace; font-size: 11px; color: #a6e3a1;
+    word-break: break-all; cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -517,6 +680,8 @@
       <div id="query-tabs">
         <div class="q-tab active" id="tab-nl" onclick="switchTab('nl')">💬 Natural Language</div>
         <div class="q-tab" id="tab-sql" onclick="switchTab('sql')">⌨ SQL Editor</div>
+        <div class="q-tab" id="tab-saved" onclick="switchTab('saved')">🔖 Saved</div>
+        <div class="q-tab" id="tab-history" onclick="switchTab('history')">🕐 History</div>
       </div>
 
       <!-- NL -->
@@ -527,6 +692,14 @@
         </div>
         <div class="nl-examples" id="nl-examples">
           <span class="nl-examples-lbl">Try:</span>
+        </div>
+        <!-- Suggest banner -->
+        <div id="suggest-banner">
+          <div class="suggest-hdr">
+            <span class="suggest-hdr-title">💡 AI-Suggested Questions for this database</span>
+            <button class="tbl-action-btn" onclick="document.getElementById('suggest-banner').style.display='none'">✕</button>
+          </div>
+          <div class="suggest-grid" id="suggest-grid"></div>
         </div>
         <div id="healing-panel">
           <div class="status-empty">
@@ -545,24 +718,142 @@
             <button id="btn-run-sql" onclick="runSQL()">▶ Run</button>
             <span class="sql-hint">Ctrl+Enter</span>
             <div class="spacer"></div>
+            <button class="btn-action" onclick="optimizeSQL()" title="AI reviews your query">⚡ Optimize</button>
+            <button class="btn-action" onclick="generateAPI()" title="Generate REST API endpoint" id="btn-gen-api" style="display:none">🔌 API</button>
             <button class="btn-export" id="btn-export-sql" style="display:none" onclick="exportCSV()">⬇ CSV</button>
           </div>
           <div id="sql-error-bar"></div>
+          <!-- Optimize Panel -->
+          <div id="optimize-panel">
+            <div class="optimize-section">
+              <div class="optimize-label">Issues</div>
+              <div id="opt-issues"></div>
+            </div>
+            <div class="optimize-section">
+              <div class="optimize-label">Suggestions</div>
+              <div id="opt-suggestions"></div>
+            </div>
+            <div class="optimize-section">
+              <div class="optimize-label">Optimized SQL</div>
+              <pre style="background:#181825;border-radius:5px;padding:8px;font-size:11px;color:#89dceb;overflow-x:auto;cursor:pointer;" id="opt-sql" onclick="useOptimizedSQL()" title="Click to use this SQL"></pre>
+            </div>
+            <div style="font-size:11px;color:#a6adc8;line-height:1.6;" id="opt-explanation"></div>
+          </div>
         </div>
         <div id="sql-results">
           <div class="results-bar">
             <span class="results-title">Results</span>
             <span class="results-count" id="results-count"></span>
             <div class="spacer"></div>
-            <button class="btn-export" onclick="exportCSV()">⬇ Export CSV</button>
+            <div class="result-actions" id="result-actions" style="display:none">
+              <button class="btn-action" id="btn-chart" onclick="toggleChart()" title="Visualize as chart">📊 Chart</button>
+              <button class="btn-action" id="btn-pivot" onclick="togglePivot()" title="Pivot table">⊞ Pivot</button>
+              <button class="btn-action" onclick="saveCurrentQuery()" title="Save this query">🔖 Save</button>
+              <button class="btn-action" onclick="shareResults()" title="Share results via link">🔗 Share</button>
+              <button class="btn-action" onclick="aiStory()" title="AI business narrative">✨ Story</button>
+              <button class="btn-export" onclick="exportCSV()">⬇ CSV</button>
+              <button class="btn-export" onclick="exportJSON()">⬇ JSON</button>
+            </div>
           </div>
           <div class="results-table-wrap" id="results-table-wrap"></div>
+          <!-- Chart Panel -->
+          <div id="chart-panel">
+            <div class="chart-controls">
+              <label>Type:</label>
+              <select id="chart-type" onchange="renderChart()">
+                <option value="bar">Bar</option>
+                <option value="line">Line</option>
+                <option value="pie">Pie</option>
+                <option value="doughnut">Doughnut</option>
+                <option value="scatter">Scatter</option>
+              </select>
+              <label>X:</label>
+              <select id="chart-x" onchange="renderChart()"></select>
+              <label>Y:</label>
+              <select id="chart-y" onchange="renderChart()"></select>
+              <button class="btn-action" onclick="toggleChart()">✕ Close</button>
+            </div>
+            <div id="chart-canvas-wrap"><canvas id="chart-canvas"></canvas></div>
+          </div>
+          <!-- Pivot Panel -->
+          <div id="pivot-panel">
+            <div class="pivot-controls">
+              <label>Rows:</label>
+              <select id="pivot-row" onchange="renderPivot()"></select>
+              <label>Columns:</label>
+              <select id="pivot-col" onchange="renderPivot()"></select>
+              <label>Values:</label>
+              <select id="pivot-val" onchange="renderPivot()"></select>
+              <select id="pivot-agg" onchange="renderPivot()">
+                <option value="sum">SUM</option>
+                <option value="count">COUNT</option>
+                <option value="avg">AVG</option>
+                <option value="max">MAX</option>
+                <option value="min">MIN</option>
+              </select>
+              <button class="btn-action" onclick="togglePivot()">✕ Close</button>
+            </div>
+            <div id="pivot-table-wrap" style="overflow:auto;max-height:280px;"></div>
+          </div>
         </div>
+      </div>
+
+      <!-- Saved Queries -->
+      <div id="saved-panel" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
+        <div style="padding:10px 14px;border-bottom:1px solid #313244;display:flex;align-items:center;gap:10px;">
+          <span style="font-size:12px;font-weight:700;color:#cba6f7;">🔖 Saved Queries</span>
+          <span style="font-size:11px;color:#585b70;">Click to load into SQL editor</span>
+        </div>
+        <div id="saved-list" style="flex:1;overflow-y:auto;padding:12px;"></div>
+      </div>
+
+      <!-- History -->
+      <div id="history-panel" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
+        <div style="padding:10px 14px;border-bottom:1px solid #313244;display:flex;align-items:center;gap:10px;">
+          <span style="font-size:12px;font-weight:700;color:#89b4fa;">🕐 Query History</span>
+          <span style="flex:1;"></span>
+          <button class="btn-action" onclick="clearHistory()" style="font-size:10px;">Clear All</button>
+        </div>
+        <div id="history-list" style="flex:1;overflow-y:auto;padding:12px;"></div>
       </div>
 
     </div><!-- /query-panel-wrap -->
   </div><!-- /main -->
 </div><!-- /app -->
+
+<!-- Insight Panel (right slide-in) -->
+<div id="insight-panel">
+  <div class="insight-hdr">
+    <span class="insight-hdr-title" id="insight-title">Insights</span>
+    <div class="insight-hdr-actions">
+      <button class="tbl-action-btn" id="insight-copy-btn" onclick="copyInsight()" style="display:none">Copy</button>
+      <button class="tbl-action-btn" onclick="closeInsightPanel()">✕ Close</button>
+    </div>
+  </div>
+  <div class="insight-body" id="insight-body"><div class="insight-loading">Loading…</div></div>
+</div>
+
+<!-- API Code Modal -->
+<div class="modal-overlay" id="api-modal">
+  <div class="modal" style="width:700px;max-width:95vw;">
+    <div class="modal-header">
+      <span class="modal-title">🔌 Generate API Endpoint</span>
+      <button class="modal-close" onclick="document.getElementById('api-modal').classList.remove('open')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="api-framework-tabs">
+        <button class="api-fw-tab active" onclick="setAPIFramework('fastapi',this)">FastAPI (Python)</button>
+        <button class="api-fw-tab" onclick="setAPIFramework('express',this)">Express (Node.js)</button>
+        <button class="api-fw-tab" onclick="setAPIFramework('flask',this)">Flask (Python)</button>
+      </div>
+      <div id="api-code-block">Generating…</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="copyAPICode()">📋 Copy Code</button>
+      <button class="btn-secondary" onclick="document.getElementById('api-modal').classList.remove('open')">Close</button>
+    </div>
+  </div>
+</div>
 
 <!-- Connection Modal -->
 <div class="modal-overlay" id="conn-modal">
@@ -698,8 +989,11 @@ let connections = [];
 let activeConnId = null;
 let editingConnId = null;
 let currentTab = 'nl';
-let currentResults = null;    // {columns, rows} for export
+let currentResults = null;    // {columns, rows, sql, question} for export/AI
 let previewResults = null;
+let lastQuestion = '';
+let _chartInstance = null;
+let _currentAPIFramework = 'fastapi';
 
 const COLORS = ['#7c5cfc','#89b4fa','#a6e3a1','#fab387','#f38ba8','#eba0ac','#cba6f7','#89dceb','#f9e2af','#b4befe'];
 let selectedColor = COLORS[0];
@@ -786,7 +1080,16 @@ function buildConnNode(conn) {
   const editBtn = document.createElement('button');
   editBtn.className = 'conn-act-btn'; editBtn.title = 'Edit'; editBtn.textContent = '✎';
   editBtn.onclick = e => { e.stopPropagation(); openConnModal(conn.id); };
-  actions.appendChild(editBtn);
+
+  const doctorBtn = document.createElement('button');
+  doctorBtn.className = 'conn-act-btn'; doctorBtn.title = 'Schema Doctor (AI health report)'; doctorBtn.textContent = '🩺';
+  doctorBtn.onclick = e => { e.stopPropagation(); runSchemaDoctor(conn.id); };
+
+  const suggestBtn = document.createElement('button');
+  suggestBtn.className = 'conn-act-btn'; suggestBtn.title = 'AI Query Suggestions'; suggestBtn.textContent = '💡';
+  suggestBtn.onclick = e => { e.stopPropagation(); loadSuggestQueries(conn.id); };
+
+  actions.appendChild(editBtn); actions.appendChild(doctorBtn); actions.appendChild(suggestBtn);
 
   hdr.appendChild(dot); hdr.appendChild(lbl); hdr.appendChild(status);
   hdr.appendChild(actions); hdr.appendChild(chevron);
@@ -851,7 +1154,21 @@ function buildTableNode(connId, tbl) {
   const chevron = document.createElement('span');
   chevron.className = 'tree-table-chevron'; chevron.textContent = '▶';
 
-  row.appendChild(icon); row.appendChild(name); row.appendChild(count); row.appendChild(chevron);
+  // Action buttons (shown on hover)
+  const tblActions = document.createElement('div');
+  tblActions.className = 'tbl-actions';
+
+  const explainBtn = document.createElement('button');
+  explainBtn.className = 'tbl-action-btn'; explainBtn.textContent = '🔍 Explain';
+  explainBtn.onclick = e => { e.stopPropagation(); explainTable(connId, tbl.table); };
+
+  const qualityBtn = document.createElement('button');
+  qualityBtn.className = 'tbl-action-btn'; qualityBtn.textContent = '🏥 Quality';
+  qualityBtn.onclick = e => { e.stopPropagation(); runDataQuality(connId, tbl.table); };
+
+  tblActions.appendChild(explainBtn); tblActions.appendChild(qualityBtn);
+  row.appendChild(icon); row.appendChild(name); row.appendChild(count);
+  row.appendChild(tblActions); row.appendChild(chevron);
 
   // Column list
   const colDiv = document.createElement('div');
@@ -915,6 +1232,9 @@ async function selectConnection(connId, autoConnect=true) {
   document.getElementById('bar-type').textContent = conn.type.toUpperCase();
 
   closePreview();
+  // Load history and saved for this connection
+  if (currentTab === 'history') loadHistory();
+  if (currentTab === 'saved')   loadSaved();
 }
 
 async function disconnectActive() {
@@ -962,11 +1282,15 @@ function closePreview() {
 // ── Tabs ───────────────────────────────────────────────────────────────────
 function switchTab(tab) {
   currentTab = tab;
-  document.getElementById('tab-nl').className = 'q-tab' + (tab==='nl'?' active':'');
-  document.getElementById('tab-sql').className = 'q-tab' + (tab==='sql'?' active':'');
-  document.getElementById('nl-panel').style.display = tab==='nl' ? 'flex' : 'none';
-  const sp = document.getElementById('sql-panel');
-  sp.style.display = tab==='sql' ? 'flex' : 'none';
+  ['nl','sql','saved','history'].forEach(t => {
+    document.getElementById('tab-'+t).className = 'q-tab' + (tab===t?' active':'');
+  });
+  document.getElementById('nl-panel').style.display      = tab==='nl'      ? 'flex' : 'none';
+  document.getElementById('sql-panel').style.display     = tab==='sql'     ? 'flex' : 'none';
+  document.getElementById('saved-panel').style.display   = tab==='saved'   ? 'flex' : 'none';
+  document.getElementById('history-panel').style.display = tab==='history' ? 'flex' : 'none';
+  if (tab === 'history' && activeConnId) loadHistory();
+  if (tab === 'saved'   && activeConnId) loadSaved();
 }
 
 // ── NL Panel ───────────────────────────────────────────────────────────────
@@ -992,6 +1316,7 @@ async function submitNL() {
   if (!activeConnId) { showToast('Select a connection first', 'error'); return; }
   const q = document.getElementById('nl-question').value.trim();
   if (!q) return;
+  lastQuestion = q;
 
   const btn = document.getElementById('btn-ask');
   btn.disabled = true;
@@ -1054,7 +1379,7 @@ async function submitNL() {
         badge.className = 'attempt-badge badge-ok'; badge.textContent = '✓ Success';
         currentCard.querySelector('.exec-indicator')?.remove();
       }
-      currentResults = { columns: msg.columns, rows: msg.rows };
+      currentResults = { columns: msg.columns, rows: msg.rows, sql: msg.sql, question: lastQuestion };
 
       const resCard = document.createElement('div');
       resCard.className = 'attempt-card';
@@ -1120,10 +1445,15 @@ async function runSQL() {
       eb.textContent = data.error; eb.style.display = 'block';
     } else {
       currentResults = data;
+      currentResults.sql = sql;
       document.getElementById('results-count').textContent = `${data.rows.length} row${data.rows.length!==1?'s':''}`;
       document.getElementById('results-table-wrap').innerHTML = renderTable(data.columns, data.rows);
       resultsPanel.style.display = 'flex';
       document.getElementById('btn-export-sql').style.display = 'inline-block';
+      document.getElementById('btn-gen-api').style.display = 'inline-block';
+      document.getElementById('result-actions').style.display = 'flex';
+      document.getElementById('optimize-panel').style.display = 'none';
+      hideChart(); hidePivot();
       refreshNavTables();
     }
   } catch(e) {
@@ -1723,7 +2053,486 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.FIREBASE_CONFIG = window.FIREBASE_CONFIG || {};
   }
   initFirebase();
+  // Handle shared result link
+  const m = location.pathname.match(/^\/share\/(.+)$/);
+  if (m) loadSharedResult(m[1]);
 });
+
+// ── SSE stream helper ──────────────────────────────────────────────────────
+async function streamSSE(url, onChunk, opts = {}) {
+  const r = await authFetch(url, opts);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const d = line.slice(6).trim();
+      if (d === '[DONE]') return;
+      try { onChunk(JSON.parse(d)); } catch {}
+    }
+  }
+}
+
+// ── Insight Panel ──────────────────────────────────────────────────────────
+let _insightMd = '';
+function openInsightPanel(title, showCopy = true) {
+  _insightMd = '';
+  document.getElementById('insight-title').textContent = title;
+  document.getElementById('insight-body').innerHTML = '<div class="insight-loading">⏳ Generating…</div>';
+  document.getElementById('insight-copy-btn').style.display = showCopy ? 'inline-block' : 'none';
+  document.getElementById('insight-panel').classList.add('open');
+}
+function closeInsightPanel() {
+  document.getElementById('insight-panel').classList.remove('open');
+}
+function appendInsight(text) {
+  _insightMd += text;
+  document.getElementById('insight-body').innerHTML = marked.parse(_insightMd);
+}
+function copyInsight() {
+  navigator.clipboard.writeText(_insightMd).then(() => showToast('Copied!', 'success'));
+}
+
+// ── Explain Table ──────────────────────────────────────────────────────────
+async function explainTable(connId, table) {
+  openInsightPanel(`🔍 ${table} — AI Explanation`);
+  try {
+    await streamSSE(`/api/connections/${connId}/explain/${encodeURIComponent(table)}`, d => appendInsight(d.text));
+  } catch(e) {
+    document.getElementById('insight-body').innerHTML = `<div style="color:#f38ba8">${e.message}</div>`;
+  }
+}
+
+// ── Schema Doctor ──────────────────────────────────────────────────────────
+async function runSchemaDoctor(connId) {
+  openInsightPanel('🩺 Schema Doctor — AI Health Report');
+  try {
+    await streamSSE(`/api/connections/${connId}/schema-doctor`, d => appendInsight(d.text));
+  } catch(e) {
+    document.getElementById('insight-body').innerHTML = `<div style="color:#f38ba8">${e.message}</div>`;
+  }
+}
+
+// ── Data Quality Scan ──────────────────────────────────────────────────────
+async function runDataQuality(connId, table) {
+  openInsightPanel(`🏥 ${table} — Data Quality Report`, false);
+  document.getElementById('insight-body').innerHTML = '<div class="insight-loading">⏳ Scanning…</div>';
+  try {
+    const r = await authFetch(`/api/connections/${connId}/quality/${encodeURIComponent(table)}`);
+    const d = await r.json();
+    const scoreClass = d.score >= 80 ? 'good' : d.score >= 50 ? 'ok' : 'poor';
+    let html = `<div class="quality-score ${scoreClass}">${d.score}/100</div>
+<div style="text-align:center;font-size:11px;color:#6c7086;margin-bottom:16px;">${d.row_count.toLocaleString()} rows · ${d.column_count} columns</div>`;
+    if (d.issues.length) {
+      html += '<h2>⚠️ Issues</h2>';
+      for (const i of d.issues) {
+        html += `<div class="quality-issue ${i.severity}">
+          <span>${i.severity === 'high' ? '🔴' : '🟡'}</span>
+          <div><strong>${i.column || 'Table'}</strong>: ${i.issue}</div></div>`;
+      }
+    } else {
+      html += '<div style="color:#a6e3a1;padding:10px 0;">✅ No issues detected!</div>';
+    }
+    html += `<h2>Column Stats</h2>
+<table class="quality-col-table"><thead><tr><th>Column</th><th>NULLs</th><th>NULL %</th><th>Duplicates</th></tr></thead><tbody>`;
+    for (const s of d.stats) {
+      html += `<tr><td>${s.column}</td><td>${s.null_count.toLocaleString()}</td>
+<td><div class="null-bar"><div class="null-fill" style="width:${Math.min(s.null_pct,100)}%"></div></div>
+ ${s.null_pct}%</td>
+<td>${s.duplicate_values.toLocaleString()}</td></tr>`;
+    }
+    html += '</tbody></table>';
+    document.getElementById('insight-body').innerHTML = html;
+  } catch(e) {
+    document.getElementById('insight-body').innerHTML = `<div style="color:#f38ba8">${e.message}</div>`;
+  }
+}
+
+// ── Suggest Queries ────────────────────────────────────────────────────────
+async function loadSuggestQueries(connId) {
+  const banner = document.getElementById('suggest-banner');
+  const grid   = document.getElementById('suggest-grid');
+  banner.style.display = 'block';
+  grid.innerHTML = '<div style="color:#585b70;font-size:11px;padding:6px;">⏳ Generating suggestions…</div>';
+  switchTab('nl');
+  try {
+    const r = await authFetch(`/api/connections/${connId}/suggest`);
+    const d = await r.json();
+    if (!d.questions || !d.questions.length) { banner.style.display = 'none'; return; }
+    grid.innerHTML = '';
+    for (const q of d.questions) {
+      const chip = document.createElement('button');
+      chip.className = 'suggest-chip';
+      chip.textContent = q;
+      chip.onclick = () => {
+        document.getElementById('nl-question').value = q;
+        banner.style.display = 'none';
+        submitNL();
+      };
+      grid.appendChild(chip);
+    }
+  } catch(e) {
+    grid.innerHTML = `<div style="color:#f38ba8;font-size:11px;">${e.message}</div>`;
+  }
+}
+
+// ── AI Data Story ──────────────────────────────────────────────────────────
+async function aiStory() {
+  if (!currentResults) return;
+  openInsightPanel('✨ AI Data Story');
+  try {
+    await streamSSE(`/api/connections/${activeConnId}/story`, d => appendInsight(d.text), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question: currentResults.question || '',
+        sql: currentResults.sql || '',
+        columns: currentResults.columns,
+        rows: currentResults.rows,
+      }),
+    });
+  } catch(e) {
+    document.getElementById('insight-body').innerHTML = `<div style="color:#f38ba8">${e.message}</div>`;
+  }
+}
+
+// ── Optimize SQL ───────────────────────────────────────────────────────────
+async function optimizeSQL() {
+  const sql = document.getElementById('sql-editor').value.trim();
+  if (!sql || !activeConnId) { showToast('Write SQL first', 'error'); return; }
+  const panel = document.getElementById('optimize-panel');
+  panel.style.display = 'block';
+  document.getElementById('opt-issues').innerHTML = '<span style="color:#585b70">Analyzing…</span>';
+  document.getElementById('opt-suggestions').innerHTML = '';
+  document.getElementById('opt-sql').textContent = '';
+  document.getElementById('opt-explanation').textContent = '';
+  try {
+    const r = await authFetch(`/api/connections/${activeConnId}/optimize`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql }),
+    });
+    const d = await r.json();
+    document.getElementById('opt-issues').innerHTML =
+      (d.issues.length ? d.issues : ['No issues found']).map(i => `<div class="optimize-tag">⚠ ${i}</div>`).join('');
+    document.getElementById('opt-suggestions').innerHTML =
+      (d.suggestions.length ? d.suggestions : ['Looks good!']).map(s => `<div class="optimize-tag" style="color:#a6e3a1">✓ ${s}</div>`).join('');
+    document.getElementById('opt-sql').textContent = d.optimized_sql || sql;
+    document.getElementById('opt-explanation').textContent = d.explanation || '';
+  } catch(e) {
+    document.getElementById('opt-issues').innerHTML = `<span style="color:#f38ba8">${e.message}</span>`;
+  }
+}
+function useOptimizedSQL() {
+  const sql = document.getElementById('opt-sql').textContent;
+  if (sql) { document.getElementById('sql-editor').value = sql; showToast('SQL loaded', 'success'); }
+}
+
+// ── Generate API ───────────────────────────────────────────────────────────
+async function generateAPI() {
+  const sql = currentResults?.sql || document.getElementById('sql-editor').value.trim();
+  if (!sql) { showToast('Run a query first', 'error'); return; }
+  document.getElementById('api-modal').classList.add('open');
+  document.getElementById('api-code-block').textContent = 'Generating…';
+  await fetchAPICode(sql, _currentAPIFramework);
+}
+async function fetchAPICode(sql, fw) {
+  try {
+    const r = await authFetch(`/api/connections/${activeConnId}/generate-api`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql, framework: fw }),
+    });
+    const d = await r.json();
+    document.getElementById('api-code-block').textContent = d.code || 'No code generated';
+  } catch(e) {
+    document.getElementById('api-code-block').textContent = e.message;
+  }
+}
+async function setAPIFramework(fw, btn) {
+  _currentAPIFramework = fw;
+  document.querySelectorAll('.api-fw-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const sql = currentResults?.sql || document.getElementById('sql-editor').value.trim();
+  document.getElementById('api-code-block').textContent = 'Generating…';
+  await fetchAPICode(sql, fw);
+}
+function copyAPICode() {
+  const code = document.getElementById('api-code-block').textContent;
+  navigator.clipboard.writeText(code).then(() => showToast('Code copied!', 'success'));
+}
+
+// ── Charts ─────────────────────────────────────────────────────────────────
+function populateChartSelects(columns) {
+  ['chart-x','chart-y'].forEach(id => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = columns.map((c,i) => `<option value="${i}">${c}</option>`).join('');
+  });
+}
+async function toggleChart() {
+  const panel = document.getElementById('chart-panel');
+  if (panel.style.display === 'block') { hideChart(); return; }
+  if (!currentResults?.columns?.length) return;
+  document.getElementById('btn-chart').classList.add('active');
+  panel.style.display = 'block';
+  hidePivot();
+  populateChartSelects(currentResults.columns);
+  // Ask AI for best chart type
+  try {
+    const r = await authFetch(`/api/connections/${activeConnId}/chart-suggest`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ columns: currentResults.columns, rows: currentResults.rows }),
+    });
+    const s = await r.json();
+    document.getElementById('chart-type').value = s.chart_type;
+    document.getElementById('chart-x').value    = s.x;
+    document.getElementById('chart-y').value    = s.y;
+  } catch {}
+  renderChart();
+}
+function hideChart() {
+  document.getElementById('chart-panel').style.display = 'none';
+  document.getElementById('btn-chart').classList.remove('active');
+  if (_chartInstance) { _chartInstance.destroy(); _chartInstance = null; }
+}
+function renderChart() {
+  if (!currentResults) return;
+  const type  = document.getElementById('chart-type').value;
+  const xIdx  = parseInt(document.getElementById('chart-x').value);
+  const yIdx  = parseInt(document.getElementById('chart-y').value);
+  const { columns, rows } = currentResults;
+  const labels = rows.map(r => String(r[xIdx] ?? ''));
+  const data   = rows.map(r => parseFloat(r[yIdx]) || 0);
+  const PALLETE = ['#7c5cfc','#89b4fa','#a6e3a1','#fab387','#f38ba8','#cba6f7','#89dceb','#f9e2af'];
+  if (_chartInstance) _chartInstance.destroy();
+  const ctx = document.getElementById('chart-canvas').getContext('2d');
+  _chartInstance = new Chart(ctx, {
+    type,
+    data: {
+      labels,
+      datasets: [{
+        label: columns[yIdx],
+        data,
+        backgroundColor: type === 'line' ? 'rgba(124,92,252,.15)' : PALLETE,
+        borderColor: type === 'line' ? '#7c5cfc' : PALLETE,
+        borderWidth: 2,
+        fill: type === 'line',
+        tension: 0.4,
+        pointBackgroundColor: '#7c5cfc',
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#a6adc8', font: { size: 11 } } },
+      },
+      scales: type === 'pie' || type === 'doughnut' ? {} : {
+        x: { ticks: { color: '#585b70', font: { size: 10 } }, grid: { color: '#313244' } },
+        y: { ticks: { color: '#585b70', font: { size: 10 } }, grid: { color: '#313244' } },
+      },
+    },
+  });
+}
+
+// ── Pivot Table ────────────────────────────────────────────────────────────
+function togglePivot() {
+  const panel = document.getElementById('pivot-panel');
+  if (panel.style.display === 'block') { hidePivot(); return; }
+  if (!currentResults?.columns?.length || currentResults.columns.length < 2) {
+    showToast('Need at least 2 columns for pivot', 'error'); return;
+  }
+  document.getElementById('btn-pivot').classList.add('active');
+  panel.style.display = 'block';
+  hideChart();
+  const cols = currentResults.columns;
+  ['pivot-row','pivot-col','pivot-val'].forEach(id => {
+    document.getElementById(id).innerHTML = cols.map((c,i) => `<option value="${i}">${c}</option>`).join('');
+  });
+  document.getElementById('pivot-col').value = Math.min(1, cols.length-1);
+  document.getElementById('pivot-val').value = Math.min(2, cols.length-1);
+  renderPivot();
+}
+function hidePivot() {
+  document.getElementById('pivot-panel').style.display = 'none';
+  document.getElementById('btn-pivot').classList.remove('active');
+}
+function renderPivot() {
+  const rowIdx = parseInt(document.getElementById('pivot-row').value);
+  const colIdx = parseInt(document.getElementById('pivot-col').value);
+  const valIdx = parseInt(document.getElementById('pivot-val').value);
+  const agg    = document.getElementById('pivot-agg').value;
+  const { rows } = currentResults;
+  // Build pivot map
+  const rowVals = [...new Set(rows.map(r => String(r[rowIdx] ?? '')))].sort();
+  const colVals = [...new Set(rows.map(r => String(r[colIdx] ?? '')))].sort();
+  const pivot   = {};
+  for (const rv of rowVals) {
+    pivot[rv] = {};
+    for (const cv of colVals) {
+      const vals = rows.filter(r => String(r[rowIdx]) === rv && String(r[colIdx]) === cv)
+                       .map(r => parseFloat(r[valIdx]) || 0);
+      if (!vals.length) { pivot[rv][cv] = null; continue; }
+      pivot[rv][cv] = agg === 'sum'   ? vals.reduce((a,b)=>a+b,0)
+                    : agg === 'count' ? vals.length
+                    : agg === 'avg'   ? vals.reduce((a,b)=>a+b,0)/vals.length
+                    : agg === 'max'   ? Math.max(...vals)
+                    : Math.min(...vals);
+    }
+  }
+  let html = `<table><thead><tr><th>${currentResults.columns[rowIdx]} \\ ${currentResults.columns[colIdx]}</th>`;
+  for (const cv of colVals) html += `<th>${esc(cv)}</th>`;
+  html += '</tr></thead><tbody>';
+  for (const rv of rowVals) {
+    html += `<tr><td style="font-weight:600">${esc(rv)}</td>`;
+    for (const cv of colVals) {
+      const v = pivot[rv][cv];
+      html += `<td>${v === null ? '<span style="color:#313244">—</span>' : v.toLocaleString(undefined,{maximumFractionDigits:2})}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('pivot-table-wrap').innerHTML = html;
+}
+
+// ── Share Results ──────────────────────────────────────────────────────────
+async function shareResults() {
+  if (!currentResults || !activeConnId) return;
+  const conn = connections.find(c => c.id === activeConnId);
+  try {
+    const r = await authFetch('/api/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sql: currentResults.sql || '',
+        question: currentResults.question || '',
+        columns: currentResults.columns,
+        rows: currentResults.rows,
+        conn_name: conn?.name || 'Database',
+      }),
+    });
+    const d = await r.json();
+    const url = `${location.origin}/share/${d.share_id}`;
+    navigator.clipboard.writeText(url).then(() => {});
+    showToast(`Link copied! Expires in 7 days`, 'success');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function loadSharedResult(shareId) {
+  try {
+    const r = await fetch(`/api/share/${shareId}`);
+    if (!r.ok) { showToast('Share link expired or not found', 'error'); return; }
+    const d = await r.json();
+    // Show the shared result without auth screen
+    document.getElementById('auth-screen').classList.remove('visible');
+    document.getElementById('no-conn-msg').style.display = 'none';
+    document.getElementById('conn-info').style.display = 'flex';
+    document.getElementById('bar-dot').style.background = '#7c5cfc';
+    document.getElementById('bar-name').textContent = d.conn_name || 'Shared Result';
+    document.getElementById('bar-type').textContent = 'SHARED';
+    switchTab('sql');
+    if (d.sql) document.getElementById('sql-editor').value = d.sql;
+    currentResults = { columns: d.columns, rows: d.rows, sql: d.sql, question: d.question };
+    document.getElementById('results-count').textContent = `${d.rows.length} rows`;
+    document.getElementById('results-table-wrap').innerHTML = renderTable(d.columns, d.rows);
+    document.getElementById('sql-results').style.display = 'flex';
+    document.getElementById('result-actions').style.display = 'flex';
+    showToast(`Shared by: ${d.conn_name}`, 'success');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+// ── Query History ──────────────────────────────────────────────────────────
+async function loadHistory() {
+  if (!activeConnId) return;
+  const list = document.getElementById('history-list');
+  list.innerHTML = '<div style="color:#585b70;font-size:11px;padding:8px;">Loading…</div>';
+  try {
+    const r = await authFetch(`/api/connections/${activeConnId}/history`);
+    const items = await r.json();
+    if (!items.length) { list.innerHTML = '<div style="color:#585b70;font-size:11px;padding:8px;">No history yet. Run some queries!</div>'; return; }
+    list.innerHTML = '';
+    for (const item of items) {
+      const div = document.createElement('div');
+      div.className = 'hist-item';
+      const ts = new Date(item.ts).toLocaleString();
+      div.innerHTML = `<div class="hist-question">${esc(item.question || 'SQL Query')}</div>
+<div class="hist-sql">${esc(item.sql)}</div>
+<div class="hist-meta"><span>🕐 ${ts}</span><span>📊 ${item.row_count} rows</span></div>`;
+      div.onclick = () => {
+        document.getElementById('sql-editor').value = item.sql;
+        if (item.question) document.getElementById('nl-question').value = item.question;
+        switchTab('sql');
+      };
+      list.appendChild(div);
+    }
+  } catch(e) { list.innerHTML = `<div style="color:#f38ba8;font-size:11px;">${e.message}</div>`; }
+}
+async function clearHistory() {
+  if (!activeConnId || !confirm('Clear all history for this connection?')) return;
+  await authFetch(`/api/connections/${activeConnId}/history`, { method: 'DELETE' });
+  loadHistory();
+}
+
+// ── Saved Queries ──────────────────────────────────────────────────────────
+async function loadSaved() {
+  if (!activeConnId) return;
+  const list = document.getElementById('saved-list');
+  list.innerHTML = '<div style="color:#585b70;font-size:11px;padding:8px;">Loading…</div>';
+  try {
+    const r = await authFetch(`/api/connections/${activeConnId}/saved`);
+    const items = await r.json();
+    if (!items.length) { list.innerHTML = '<div style="color:#585b70;font-size:11px;padding:8px;">No saved queries yet. Run a query and click 🔖 Save.</div>'; return; }
+    list.innerHTML = '';
+    for (const item of items) {
+      const div = document.createElement('div');
+      div.className = 'saved-item';
+      div.innerHTML = `<div class="saved-name">${esc(item.name)}</div>
+<div class="hist-sql">${esc(item.sql)}</div>
+<div class="hist-meta"><span>${item.question ? '💬 ' + esc(item.question) : ''}</span></div>
+<div class="saved-actions">
+  <button class="tbl-action-btn" onclick="loadSavedQuery(${JSON.stringify(item.sql)}, ${JSON.stringify(item.question)}, event)">Load</button>
+  <button class="tbl-action-btn" style="color:#f38ba8" onclick="deleteSaved('${item.id}', event)">Delete</button>
+</div>`;
+      list.appendChild(div);
+    }
+  } catch(e) { list.innerHTML = `<div style="color:#f38ba8;font-size:11px;">${e.message}</div>`; }
+}
+function loadSavedQuery(sql, question, e) {
+  e.stopPropagation();
+  document.getElementById('sql-editor').value = sql;
+  if (question) document.getElementById('nl-question').value = question;
+  switchTab('sql');
+}
+async function deleteSaved(id, e) {
+  e.stopPropagation();
+  await authFetch(`/api/connections/${activeConnId}/saved/${id}`, { method: 'DELETE' });
+  loadSaved();
+}
+async function saveCurrentQuery() {
+  if (!currentResults || !activeConnId) return;
+  const sql = currentResults.sql || document.getElementById('sql-editor').value.trim();
+  if (!sql) { showToast('No query to save', 'error'); return; }
+  const name = prompt('Name this query:', currentResults.question || 'My Query');
+  if (!name) return;
+  await authFetch(`/api/connections/${activeConnId}/saved`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, sql, question: currentResults.question || '' }),
+  });
+  showToast('Query saved!', 'success');
+}
+
+// ── Export JSON ────────────────────────────────────────────────────────────
+function exportJSON() {
+  if (!currentResults) return;
+  const { columns, rows } = currentResults;
+  const arr = rows.map(row => Object.fromEntries(columns.map((c,i) => [c, row[i]])));
+  const blob = new Blob([JSON.stringify(arr, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'results.json'; a.click();
+}
 </script>
 </body>
 </html>
