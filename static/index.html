@@ -2,8 +2,25 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SQL Agent</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="QueryLux">
+<meta name="theme-color" content="#7c5cfc">
+<meta name="description" content="AI-powered SQL workspace. Connect any database, query with natural language.">
+
+<!-- Open Graph / Social sharing -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="QueryLux — AI SQL Agent">
+<meta property="og:description" content="Connect any database and query it with natural language. Like DBeaver, but with AI superpowers.">
+<meta property="og:image" content="/icons/icon-512.png">
+
+<title>QueryLux — SQL Agent</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+
 <!-- Firebase SDK -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
@@ -3442,6 +3459,78 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // runSQL already reads from sql-editor and sets _currentSQL internally.
+
+// ── PWA: Service Worker + Install prompt ───────────────────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').then(reg => {
+      console.log('[SW] Registered', reg.scope);
+    }).catch(err => console.warn('[SW] Registration failed:', err));
+  });
+}
+
+// Capture install prompt and show Install button when ready
+let _deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  _deferredInstallPrompt = e;
+  showInstallButton();
+});
+
+window.addEventListener('appinstalled', () => {
+  _deferredInstallPrompt = null;
+  hideInstallButton();
+  showToast('QueryLux installed! Find it in your apps.', 'success');
+});
+
+function showInstallButton() {
+  let btn = document.getElementById('btn-install-pwa');
+  if (btn) { btn.style.display = 'flex'; return; }
+  btn = document.createElement('button');
+  btn.id = 'btn-install-pwa';
+  btn.title = 'Install QueryLux as an app';
+  btn.innerHTML = '⬇ Install App';
+  btn.style.cssText = `
+    background: linear-gradient(135deg, #7c5cfc, #cba6f7);
+    color: #fff; border: none; border-radius: 5px;
+    padding: 6px 13px; font-size: 12px; font-weight: 700;
+    cursor: pointer; display: flex; align-items: center; gap: 5px;
+    transition: opacity .15s; animation: pulse-install 2s infinite;
+  `;
+  btn.onclick = triggerInstall;
+
+  // Add pulse animation
+  if (!document.getElementById('pwa-install-style')) {
+    const style = document.createElement('style');
+    style.id = 'pwa-install-style';
+    style.textContent = `
+      @keyframes pulse-install {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(124,92,252,.5); }
+        50% { box-shadow: 0 0 0 6px rgba(124,92,252,0); }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // Insert before user-info in titlebar
+  const userInfo = document.getElementById('user-info');
+  userInfo.parentElement.insertBefore(btn, userInfo);
+}
+
+function hideInstallButton() {
+  const btn = document.getElementById('btn-install-pwa');
+  if (btn) btn.style.display = 'none';
+}
+
+async function triggerInstall() {
+  if (!_deferredInstallPrompt) return;
+  _deferredInstallPrompt.prompt();
+  const { outcome } = await _deferredInstallPrompt.userChoice;
+  if (outcome === 'accepted') {
+    _deferredInstallPrompt = null;
+    hideInstallButton();
+  }
+}
 </script>
 </body>
 </html>

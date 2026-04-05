@@ -2114,3 +2114,26 @@ async def serve_index():
 @app.get("/firebase-config.js")
 async def serve_firebase_config():
     return FileResponse("static/firebase-config.js", media_type="application/javascript")
+
+
+@app.get("/manifest.json")
+async def serve_manifest():
+    return FileResponse("static/manifest.json", media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+async def serve_sw():
+    # Service workers must be served from root scope with correct content-type
+    return FileResponse("static/sw.js", media_type="application/javascript",
+                        headers={"Service-Worker-Allowed": "/"})
+
+
+@app.get("/icons/{filename}")
+async def serve_icon(filename: str):
+    path = Path(f"static/icons/{filename}")
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Icon not found")
+    suffix = path.suffix.lower()
+    media = {"png": "image/png", "jpg": "image/jpeg", "svg": "image/svg+xml",
+             "webp": "image/webp"}.get(suffix.lstrip("."), "application/octet-stream")
+    return FileResponse(str(path), media_type=media, headers={"Cache-Control": "public, max-age=86400"})
