@@ -580,6 +580,7 @@
           <option value="duckdb">DuckDB</option>
           <option value="postgresql">PostgreSQL</option>
           <option value="mysql">MySQL / MariaDB</option>
+          <option value="redshift">Amazon Redshift</option>
         </select>
       </div>
       <div id="sqlite-fields" class="field-group">
@@ -609,6 +610,41 @@
           <div class="field-group">
             <label>Password</label>
             <input id="f-pass" type="password" placeholder="••••••••" />
+          </div>
+        </div>
+      </div>
+      <!-- SSH / VPC Tunnel (shown only for network DB types) -->
+      <div id="ssh-section" style="display:none;">
+        <div style="border-top:1px solid #313244;margin:8px 0;padding-top:12px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:13px;font-weight:600;color:#cdd6f4;">
+            <input type="checkbox" id="f-ssh-enabled" onchange="onSshToggle()" style="width:16px;height:16px;accent-color:#7c5cfc;cursor:pointer;" />
+            SSH / VPC Tunnel
+          </label>
+          <div id="ssh-fields" style="display:none;flex-direction:column;gap:10px;margin-top:10px;">
+            <div class="field-row">
+              <div class="field-group">
+                <label>Bastion Host</label>
+                <input id="f-ssh-host" type="text" placeholder="bastion.example.com" />
+              </div>
+              <div class="field-group" style="max-width:90px;">
+                <label>SSH Port</label>
+                <input id="f-ssh-port" type="number" value="22" placeholder="22" />
+              </div>
+            </div>
+            <div class="field-group">
+              <label>SSH Username</label>
+              <input id="f-ssh-user" type="text" placeholder="ec2-user" />
+            </div>
+            <div class="field-group">
+              <label>SSH Password <span style="font-weight:400;color:#6c7086;">(or leave blank to use private key)</span></label>
+              <input id="f-ssh-pass" type="password" placeholder="••••••••" />
+            </div>
+            <div class="field-group">
+              <label>Private Key (PEM) <span style="font-weight:400;color:#6c7086;">(paste contents of ~/.ssh/id_rsa)</span></label>
+              <textarea id="f-ssh-key" rows="4" placeholder="-----BEGIN RSA PRIVATE KEY-----
+...
+-----END RSA PRIVATE KEY-----" style="font-family:monospace;font-size:11px;resize:vertical;background:#1e1e2e;border:1px solid #313244;border-radius:6px;color:#cdd6f4;padding:8px;width:100%;box-sizing:border-box;"></textarea>
+            </div>
           </div>
         </div>
       </div>
@@ -1161,12 +1197,22 @@ function openConnModal(connId) {
     document.getElementById('f-db').value = conn.database || '';
     document.getElementById('f-user').value = conn.user || '';
     document.getElementById('f-pass').value = '';
+    // SSH fields (passwords not stored, so only restore non-secret fields)
+    document.getElementById('f-ssh-enabled').checked = !!conn.ssh_enabled;
+    document.getElementById('f-ssh-host').value = conn.ssh_host || '';
+    document.getElementById('f-ssh-port').value = conn.ssh_port || 22;
+    document.getElementById('f-ssh-user').value = conn.ssh_user || '';
+    document.getElementById('f-ssh-pass').value = '';
+    document.getElementById('f-ssh-key').value = '';
     selectedColor = conn.color || COLORS[0];
   } else {
     document.getElementById('conn-modal-title').textContent = 'New Connection';
     document.getElementById('btn-delete-conn').style.display = 'none';
     ['f-name','f-file','f-host','f-port','f-db','f-user','f-pass'].forEach(id => document.getElementById(id).value = '');
     document.getElementById('f-type').value = 'sqlite';
+    document.getElementById('f-ssh-enabled').checked = false;
+    ['f-ssh-host','f-ssh-user','f-ssh-pass','f-ssh-key'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('f-ssh-port').value = '22';
     selectedColor = COLORS[Math.floor(Math.random() * COLORS.length)];
   }
   document.querySelectorAll('.color-swatch').forEach(s => s.classList.toggle('selected', s.dataset.color === selectedColor));
@@ -1181,6 +1227,7 @@ function onTypeChange() {
   const isFile = t === 'sqlite' || t === 'duckdb';
   document.getElementById('sqlite-fields').style.display = isFile ? 'flex' : 'none';
   document.getElementById('net-fields').style.display = !isFile ? 'flex' : 'none';
+  document.getElementById('ssh-section').style.display = !isFile ? 'block' : 'none';
   if (t === 'duckdb') {
     document.getElementById('f-file-label').textContent = 'File Path';
     document.getElementById('f-file').placeholder = '/path/to/db.duckdb  or  :memory:';
@@ -1188,21 +1235,41 @@ function onTypeChange() {
     document.getElementById('f-file-label').textContent = 'File Path';
     document.getElementById('f-file').placeholder = '/path/to/db.sqlite  or  :memory:';
   }
-  if (t === 'postgresql' && !document.getElementById('f-port').value) document.getElementById('f-port').value = '5432';
-  if (t === 'mysql' && !document.getElementById('f-port').value) document.getElementById('f-port').value = '3306';
+  const portEl = document.getElementById('f-port');
+  if (!portEl.value) {
+    if (t === 'postgresql') portEl.value = '5432';
+    else if (t === 'mysql')  portEl.value = '3306';
+    else if (t === 'redshift') portEl.value = '5439';
+  }
+}
+
+function onSshToggle() {
+  const enabled = document.getElementById('f-ssh-enabled').checked;
+  document.getElementById('ssh-fields').style.display = enabled ? 'flex' : 'none';
 }
 
 function getFormData() {
   const t = document.getElementById('f-type').value;
+  const defaultPort = t === 'postgresql' ? 5432 : t === 'redshift' ? 5439 : 3306;
   const d = { name: document.getElementById('f-name').value.trim() || 'Untitled', type: t, color: selectedColor };
   if (t === 'sqlite' || t === 'duckdb') {
     d.file = document.getElementById('f-file').value.trim() || ':memory:';
   } else {
     d.host = document.getElementById('f-host').value.trim() || 'localhost';
-    d.port = parseInt(document.getElementById('f-port').value) || (t === 'postgresql' ? 5432 : 3306);
+    d.port = parseInt(document.getElementById('f-port').value) || defaultPort;
     d.database = document.getElementById('f-db').value.trim();
     d.user = document.getElementById('f-user').value.trim();
     d.password = document.getElementById('f-pass').value;
+    // SSH tunnel fields
+    const sshEnabled = document.getElementById('f-ssh-enabled').checked;
+    d.ssh_enabled = sshEnabled;
+    if (sshEnabled) {
+      d.ssh_host = document.getElementById('f-ssh-host').value.trim();
+      d.ssh_port = parseInt(document.getElementById('f-ssh-port').value) || 22;
+      d.ssh_user = document.getElementById('f-ssh-user').value.trim();
+      d.ssh_password = document.getElementById('f-ssh-pass').value;
+      d.ssh_private_key = document.getElementById('f-ssh-key').value.trim();
+    }
   }
   return d;
 }

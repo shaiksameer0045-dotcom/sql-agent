@@ -14,6 +14,14 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+# SSH tunnel support (imported lazily to avoid hard crash if not installed)
+try:
+    from sshtunnel import SSHTunnelForwarder as _SSHTunnelForwarder
+    import paramiko as _paramiko
+    _SSH_AVAILABLE = True
+except ImportError:
+    _SSH_AVAILABLE = False
+
 # ── Load .env ────────────────────────────────────────────────────────────────
 _env_file = Path(__file__).parent / ".env"
 if _env_file.exists():
@@ -98,8 +106,10 @@ async def _get_uid(request: Request) -> str:
 # ── Per-user connection registry ──────────────────────────────────────────────
 # _connections[uid][conn_id] = config dict
 # _live[uid][conn_id]        = live DB connection object
+# _tunnels[uid][conn_id]     = SSHTunnelForwarder (when SSH tunnel is active)
 _connections: dict[str, dict[str, dict]] = {}
 _live:        dict[str, dict[str, Any]]  = {}
+_tunnels:     dict[str, dict[str, Any]]  = {}
 
 
 def _user_conns(uid: str) -> dict[str, dict]:
@@ -115,14 +125,60 @@ def _user_live(uid: str) -> dict[str, Any]:
     return _live[uid]
 
 
+def _user_tunnels(uid: str) -> dict[str, Any]:
+    if uid not in _tunnels:
+        _tunnels[uid] = {}
+    return _tunnels[uid]
+
+
+def _start_tunnel(cfg: dict):
+    """Start an SSH tunnel and return the SSHTunnelForwarder. Raises on failure."""
+    if not _SSH_AVAILABLE:
+        raise RuntimeError("SSH tunnel requires 'sshtunnel' and 'paramiko' packages")
+    ssh_host  = cfg["ssh_host"]
+    ssh_port  = int(cfg.get("ssh_port", 22))
+    ssh_user  = cfg.get("ssh_user", "")
+    ssh_pass  = cfg.get("ssh_password")
+    ssh_key   = cfg.get("ssh_private_key")   # PEM text
+
+    db_host   = cfg.get("host", "localhost")
+    db_type   = cfg.get("type", "postgresql")
+    db_port   = int(cfg.get("port") or (5439 if db_type == "redshift" else 5432))
+
+    kwargs: dict = {
+        "ssh_username":        ssh_user,
+        "remote_bind_address": (db_host, db_port),
+    }
+    if ssh_key:
+        pkey = _paramiko.RSAKey.from_private_key(io.StringIO(ssh_key))
+        kwargs["ssh_pkey"] = pkey
+    elif ssh_pass:
+        kwargs["ssh_password"] = ssh_pass
+
+    tunnel = _SSHTunnelForwarder((ssh_host, ssh_port), **kwargs)
+    tunnel.start()
+    return tunnel
+
+
+def _stop_tunnel(uid: str, conn_id: str):
+    """Stop and remove an SSH tunnel for a connection if one exists."""
+    tunnel = _user_tunnels(uid).pop(conn_id, None)
+    if tunnel is not None:
+        try:
+            tunnel.stop()
+        except Exception:
+            pass
+
+
 def _connections_file(uid: str) -> Path:
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", uid)
     return DATA_DIR / f"connections_{safe}.json"
 
 
 def _save_connections(uid: str):
+    _STRIP = {"password", "ssh_password", "ssh_private_key"}
     conns = _connections.get(uid, {})
-    safe  = {cid: {k: v for k, v in cfg.items() if k != "password"}
+    safe  = {cid: {k: v for k, v in cfg.items() if k not in _STRIP}
              for cid, cfg in conns.items()}
     _connections_file(uid).write_text(json.dumps(safe, indent=2))
 
@@ -136,8 +192,12 @@ def _load_connections(uid: str):
 
 # ── Driver helpers ────────────────────────────────────────────────────────────
 
-def _open_connection(cfg: dict):
-    """Open and return a DB connection for the given config."""
+def _open_connection(cfg: dict, local_port: Optional[int] = None):
+    """Open and return a DB connection for the given config.
+
+    If local_port is given (SSH tunnel active), connect to 127.0.0.1:local_port
+    instead of the configured host/port.
+    """
     t = cfg["type"]
     if t == "sqlite":
         path = cfg.get("file", ":memory:")
@@ -148,21 +208,27 @@ def _open_connection(cfg: dict):
         import duckdb
         path = cfg.get("file", ":memory:")
         return duckdb.connect(path)
-    elif t == "postgresql":
+    elif t in ("postgresql", "redshift"):
         import psycopg2
+        default_port = 5439 if t == "redshift" else 5432
+        host = "127.0.0.1" if local_port else cfg.get("host", "localhost")
+        port = local_port if local_port else int(cfg.get("port", default_port))
         return psycopg2.connect(
-            host=cfg.get("host", "localhost"),
-            port=int(cfg.get("port", 5432)),
+            host=host,
+            port=port,
             dbname=cfg.get("database", ""),
             user=cfg.get("user", ""),
             password=cfg.get("password", ""),
             connect_timeout=10,
+            sslmode=cfg.get("sslmode", "prefer") if t == "redshift" else "prefer",
         )
     elif t == "mysql":
         import pymysql
+        host = "127.0.0.1" if local_port else cfg.get("host", "localhost")
+        port = local_port if local_port else int(cfg.get("port", 3306))
         return pymysql.connect(
-            host=cfg.get("host", "localhost"),
-            port=int(cfg.get("port", 3306)),
+            host=host,
+            port=port,
             database=cfg.get("database", ""),
             user=cfg.get("user", ""),
             password=cfg.get("password", ""),
@@ -174,33 +240,49 @@ def _open_connection(cfg: dict):
 
 
 def _get_live(conn_id: str, uid: str = "dev-user"):
-    """Return live connection, reopening if closed/lost."""
+    """Return live connection, reopening if closed/lost.
+    Ensures SSH tunnel is running first when ssh_enabled=True."""
     cfg = _user_conns(uid).get(conn_id)
     if not cfg:
         raise HTTPException(status_code=404, detail="Connection not found")
 
-    live = _user_live(uid).get(conn_id)
     t = cfg["type"]
+
+    # ── Ensure SSH tunnel is alive ────────────────────────────────────────────
+    local_port: Optional[int] = None
+    if cfg.get("ssh_enabled"):
+        tunnel = _user_tunnels(uid).get(conn_id)
+        if tunnel is None or not tunnel.is_alive:
+            # Stop stale tunnel if present
+            if tunnel is not None:
+                try:
+                    tunnel.stop()
+                except Exception:
+                    pass
+            tunnel = _start_tunnel(cfg)
+            _user_tunnels(uid)[conn_id] = tunnel
+        local_port = tunnel.local_bind_port
+
+    live = _user_live(uid).get(conn_id)
 
     # Test if still alive
     try:
         if live is not None:
-            cur = live.cursor()
             if t == "sqlite":
-                cur.execute("SELECT 1")
+                live.cursor().execute("SELECT 1")
             elif t == "duckdb":
                 live.execute("SELECT 1")
-            elif t == "postgresql":
-                cur.execute("SELECT 1")
+            elif t in ("postgresql", "redshift"):
+                live.cursor().execute("SELECT 1")
                 live.rollback()
             elif t == "mysql":
-                cur.execute("SELECT 1")
+                live.cursor().execute("SELECT 1")
             return live
     except Exception:
         pass
 
     # Reopen
-    live = _open_connection(cfg)
+    live = _open_connection(cfg, local_port=local_port)
     _user_live(uid)[conn_id] = live
     return live
 
@@ -234,7 +316,7 @@ def _get_schema(conn_id: str, uid: str = "dev-user") -> list[dict]:
             row_count = live.execute(f'SELECT COUNT(*) FROM "{tbl}"').fetchone()[0]
             result.append({"table": tbl, "columns": cols, "row_count": row_count})
 
-    elif t == "postgresql":
+    elif t in ("postgresql", "redshift"):
         cur.execute("""
             SELECT table_name FROM information_schema.tables
             WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
@@ -321,7 +403,7 @@ def _execute_sql(conn_id: str, sql: str, uid: str = "dev-user") -> tuple[list[st
         if t == "sqlite":
             columns = [d[0] for d in cur.description]
             rows = [[_coerce(v) for v in row] for row in cur.fetchall()]
-        elif t == "postgresql":
+        elif t in ("postgresql", "redshift"):
             columns = [d[0] for d in cur.description]
             rows = [[_coerce(v) for v in r] for r in cur.fetchall()]
             live.rollback()
@@ -380,7 +462,7 @@ def _rich_schema_for_llm(conn_id: str, uid: str = "dev-user") -> str:
             samples = [list(r) for r in cur.fetchall()]
             tables.append({"table": tbl, "columns": cols, "row_count": count, "samples": samples})
 
-    elif t == "postgresql":
+    elif t in ("postgresql", "redshift"):
         cur.execute("""
             SELECT table_name FROM information_schema.tables
             WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name
@@ -388,7 +470,7 @@ def _rich_schema_for_llm(conn_id: str, uid: str = "dev-user") -> str:
         table_names = [r[0] for r in cur.fetchall()]
         tables = []
         for tbl in table_names:
-            # Columns
+            # Columns + PK info
             cur.execute("""
                 SELECT c.column_name, c.data_type,
                        CASE WHEN kcu.column_name IS NOT NULL THEN true ELSE false END as is_pk
@@ -534,6 +616,27 @@ POSTGRESQL-SPECIFIC RULES:
             f"- CORRECT example: SELECT {bt}name{bt}, {bt}price{bt} FROM {bt}products{bt} WHERE {bt}stock{bt} < 50\n"
             f"- WRONG example:   SELECT \\`name\\` -- never use backslash before backtick"
         )
+
+    elif db_type == "redshift":
+        return """\
+AMAZON REDSHIFT-SPECIFIC RULES:
+- Quote identifiers with double quotes: "column_name", "table_name"
+- Default port is 5439 (not 5432)
+- AUTO-INCREMENT: use IDENTITY(1,1) — NOT SERIAL or AUTO_INCREMENT
+  e.g. id INTEGER IDENTITY(1,1)
+- VARCHAR(MAX) is equivalent to VARCHAR(65535) in Redshift
+- Date/time functions: GETDATE(), CURRENT_DATE, DATE_TRUNC('month', col),
+  DATEDIFF('day', start_date, end_date), DATEADD('month', 1, date_col)
+- String: LOWER(), UPPER(), TRIM(), LEN(), LEFT(), RIGHT(), SPLIT_PART()
+- Case-insensitive search: ILIKE '%pattern%'
+- String concat: col1 || ' ' || col2
+- Use COALESCE(col, default) for nulls
+- Window functions fully supported: ROW_NUMBER(), RANK(), LAG(), LEAD()
+- Distribution: tables may have DISTKEY/SORTKEY but you do NOT add them in queries
+- Do NOT use: CREATE INDEX CONCURRENTLY, SERIAL type, pg_catalog schema queries
+- Do NOT use backtick quotes
+- Avoid SELECT * on large tables — always specify columns
+- Use LIMIT for top-N queries"""
     return ""
 
 
@@ -700,14 +803,21 @@ def _seed_demo_duckdb(conn_id: str, uid: str = "dev-user"):
 
 class ConnectionCreate(BaseModel):
     name: str
-    type: str                    # sqlite | postgresql | mysql
-    file: Optional[str] = None   # sqlite only
+    type: str                       # sqlite | duckdb | postgresql | mysql | redshift
+    file: Optional[str] = None      # sqlite / duckdb only
     host: Optional[str] = None
     port: Optional[int] = None
     database: Optional[str] = None
     user: Optional[str] = None
     password: Optional[str] = None
     color: Optional[str] = "#7c5cfc"
+    # SSH / VPC tunnel fields
+    ssh_enabled: bool = False
+    ssh_host: Optional[str] = None
+    ssh_port: int = 22
+    ssh_user: Optional[str] = None
+    ssh_password: Optional[str] = None
+    ssh_private_key: Optional[str] = None   # PEM text
 
 
 @app.get("/api/connections")
@@ -760,6 +870,7 @@ async def disconnect(request: Request, conn_id: str):
     if live:
         try: live.close()
         except: pass
+    _stop_tunnel(uid, conn_id)
     return {"disconnected": conn_id}
 
 
@@ -770,6 +881,7 @@ async def delete_connection(request: Request, conn_id: str):
     if live:
         try: live.close()
         except: pass
+    _stop_tunnel(uid, conn_id)
     _user_conns(uid).pop(conn_id, None)
     _save_connections(uid)
     return {"deleted": conn_id}
@@ -785,6 +897,7 @@ async def update_connection(request: Request, conn_id: str, req: ConnectionCreat
     if live:
         try: live.close()
         except: pass
+    _stop_tunnel(uid, conn_id)
     cfg = {"id": conn_id, **req.dict()}
     conns[conn_id] = cfg
     _save_connections(uid)
@@ -827,7 +940,7 @@ async def preview_table(request: Request, conn_id: str, table: str, limit: int =
         t   = cfg.get("type", "sqlite")
         if t == "sqlite":
             sql = f"SELECT * FROM [{table}] LIMIT {limit}"
-        elif t in ("postgresql", "duckdb"):
+        elif t in ("postgresql", "redshift", "duckdb"):
             sql = f'SELECT * FROM "{table}" LIMIT {limit}'
         else:
             sql = f"SELECT * FROM `{table}` LIMIT {limit}"
@@ -898,7 +1011,7 @@ async def upload_file(request: Request, conn_id: str, file: UploadFile = File(..
                 vals = [row.get(c) for c in fieldnames]
                 placeholders = ",".join("?" for _ in fieldnames)
                 cur.execute(f"INSERT INTO [{table_name}] VALUES ({placeholders})", vals)
-        elif t == "postgresql":
+        elif t in ("postgresql", "redshift"):
             cur.execute(f'DROP TABLE IF EXISTS "{table_name}"')
             col_defs = ", ".join(f'"{c}" TEXT' for c in fieldnames)
             cur.execute(f'CREATE TABLE "{table_name}" ({col_defs})')
@@ -1104,9 +1217,12 @@ async def bootstrap(request: Request):
 
 @app.get("/health")
 async def health():
+    active_tunnels = sum(len(v) for v in _tunnels.values())
     return {
         "status": "ok",
         "users": len(_connections),
+        "active_tunnels": active_tunnels,
+        "ssh_available": _SSH_AVAILABLE,
         "firebase_enabled": _firebase_enabled(),
         "firebase_ready": _FIREBASE_INIT_ERROR is None,
         "firebase_error": _FIREBASE_INIT_ERROR,
