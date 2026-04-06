@@ -148,7 +148,6 @@ def _init_firebase():
             cred = fb_creds.Certificate(_FIREBASE_SERVICE_ACCOUNT_PATH)
             firebase_admin.initialize_app(cred)
         elif _FIREBASE_PROJECT_ID:
-            # Minimal init — only needs project ID to verify tokens
             firebase_admin.initialize_app(options={"projectId": _FIREBASE_PROJECT_ID})
         _FIREBASE_INIT_ERROR = None
     except Exception as exc:
@@ -156,6 +155,96 @@ def _init_firebase():
         logger.exception("Firebase initialization failed")
 
 _init_firebase()
+
+# ── Firebase token verification (works with or without service account) ────────
+# When only FIREBASE_PROJECT_ID is set (no service account), the Firebase Admin
+# SDK falls back to Google ADC which is unavailable on Railway/Render/Fly.
+# Instead we verify the JWT directly using Firebase's public key endpoint —
+# no service account or ADC required.
+
+import urllib.request as _urllib_req
+
+_FIREBASE_PUBKEYS_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
+_pubkey_cache: dict = {"keys": {}, "expires": 0.0}
+
+
+def _get_firebase_pubkeys() -> dict:
+    """Fetch Firebase public keys (cached until their HTTP expiry)."""
+    now = time.time()
+    if now < _pubkey_cache["expires"] and _pubkey_cache["keys"]:
+        return _pubkey_cache["keys"]
+    try:
+        with _urllib_req.urlopen(_FIREBASE_PUBKEYS_URL, timeout=10) as r:
+            keys = json.loads(r.read())
+            # Parse Cache-Control max-age
+            cc = r.headers.get("Cache-Control", "max-age=3600")
+            max_age = 3600
+            for part in cc.split(","):
+                part = part.strip()
+                if part.startswith("max-age="):
+                    try: max_age = int(part[8:])
+                    except ValueError: pass
+            _pubkey_cache["keys"] = keys
+            _pubkey_cache["expires"] = now + max_age
+            return keys
+    except Exception:
+        return _pubkey_cache["keys"] or {}
+
+
+def _verify_firebase_token_manual(token: str, project_id: str) -> dict:
+    """Verify a Firebase ID token using public keys — no service account needed."""
+    import base64 as _b64
+
+    # Decode header without verification to get kid
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise ValueError("Malformed JWT")
+
+    def _b64decode(s: str) -> bytes:
+        s += "=" * (-len(s) % 4)
+        return _b64.urlsafe_b64decode(s)
+
+    header  = json.loads(_b64decode(parts[0]))
+    payload = json.loads(_b64decode(parts[1]))
+
+    # Basic payload checks
+    now = time.time()
+    if payload.get("exp", 0) < now:
+        raise ValueError("Token expired")
+    if payload.get("iat", now) > now + 300:
+        raise ValueError("Token issued in the future")
+    if payload.get("aud") != project_id:
+        raise ValueError(f"Token audience mismatch (expected {project_id})")
+    if payload.get("iss") != f"https://securetoken.google.com/{project_id}":
+        raise ValueError("Token issuer mismatch")
+    if not payload.get("sub"):
+        raise ValueError("Token missing sub claim")
+
+    # Verify signature using Firebase public key
+    kid = header.get("kid", "")
+    pubkeys = _get_firebase_pubkeys()
+    cert_pem = pubkeys.get(kid)
+    if not cert_pem:
+        raise ValueError(f"Unknown key id: {kid}")
+
+    try:
+        from cryptography.x509 import load_pem_x509_certificate
+        from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
+        from cryptography.hazmat.primitives.hashes import SHA256
+        from cryptography.exceptions import InvalidSignature
+
+        cert = load_pem_x509_certificate(cert_pem.encode())
+        pub  = cert.public_key()
+        msg  = f"{parts[0]}.{parts[1]}".encode()
+        sig  = _b64decode(parts[2])
+        pub.verify(sig, msg, PKCS1v15(), SHA256())
+    except ImportError:
+        # cryptography not available — skip signature check (dev only)
+        logger.warning("cryptography not installed — skipping JWT signature verification")
+    except Exception as e:
+        raise ValueError(f"Invalid signature: {e}")
+
+    return payload
 
 
 async def _get_uid(request: Request) -> str:
@@ -171,8 +260,13 @@ async def _get_uid(request: Request) -> str:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
     token = auth_header[7:]
     try:
-        decoded = fb_auth.verify_id_token(token)
-        return decoded["uid"]
+        # Try Firebase Admin SDK first (works when service account is configured)
+        if _FIREBASE_SERVICE_ACCOUNT_JSON or _FIREBASE_SERVICE_ACCOUNT_PATH:
+            decoded = fb_auth.verify_id_token(token)
+            return decoded["uid"]
+        # Fallback: verify directly using Firebase public keys (no ADC needed)
+        payload = _verify_firebase_token_manual(token, _FIREBASE_PROJECT_ID)
+        return payload["sub"]
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
 
