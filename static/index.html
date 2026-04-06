@@ -2215,6 +2215,9 @@ function initFirebase() {
   _fbApp  = firebase.initializeApp(cfg);
   _fbAuth = firebase.auth(_fbApp);
 
+  // Handle return from signInWithRedirect (popup-blocked fallback)
+  _fbAuth.getRedirectResult().catch(() => {});
+
   _fbAuth.onAuthStateChanged(async user => {
     _currentUser = user;
     if (user) {
@@ -2249,11 +2252,20 @@ function updateUserUI(user) {
 async function signInGoogle() {
   if (!_fbAuth) return;
   clearAuthError();
+  const provider = new firebase.auth.GoogleAuthProvider();
   try {
-    const provider = new firebase.auth.GoogleAuthProvider();
     await _fbAuth.signInWithPopup(provider);
   } catch(e) {
-    showAuthError(e.message);
+    if (e.code === 'auth/popup-blocked' || e.code === 'auth/popup-closed-by-user') {
+      // Popup blocked by browser — fall back to full-page redirect
+      try {
+        await _fbAuth.signInWithRedirect(provider);
+      } catch(e2) {
+        showAuthError(e2.message);
+      }
+    } else {
+      showAuthError(e.message);
+    }
   }
 }
 

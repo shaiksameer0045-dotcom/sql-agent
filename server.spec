@@ -8,7 +8,7 @@ from pathlib import Path
 block_cipher = None
 
 a = Analysis(
-    ['server.py'],
+    ['server_entry.py'],
     pathex=[str(Path('.'))]  ,
     binaries=[],
     datas=[

@@ -1423,7 +1423,7 @@ async def ws_query(websocket: WebSocket, conn_id: str):
             return
 
         # Auth: token in WS payload (browsers can't set WS headers)
-        uid = "dev-user"
+        uid = "local-user" if _DESKTOP_MODE else "dev-user"
         if _firebase_enabled():
             if _FIREBASE_INIT_ERROR:
                 await send({"type": "failed", "message": "Firebase authentication is not configured correctly"})
@@ -1433,8 +1433,12 @@ async def ws_query(websocket: WebSocket, conn_id: str):
                 await send({"type": "failed", "message": "Unauthorized"})
                 return
             try:
-                decoded = fb_auth.verify_id_token(token)
-                uid = decoded["uid"]
+                if _FIREBASE_SERVICE_ACCOUNT_JSON or _FIREBASE_SERVICE_ACCOUNT_PATH:
+                    decoded = fb_auth.verify_id_token(token)
+                    uid = decoded["uid"]
+                else:
+                    payload_jwt = _verify_firebase_token_manual(token, _FIREBASE_PROJECT_ID)
+                    uid = payload_jwt["sub"]
             except Exception as e:
                 await send({"type": "failed", "message": f"Invalid token: {e}"})
                 return
@@ -1962,22 +1966,26 @@ async def ws_chat(websocket: WebSocket, conn_id: str):
     async def send(obj: dict):
         await websocket.send_text(json.dumps(obj))
 
-    uid = "dev-user"
+    uid = "local-user" if _DESKTOP_MODE else "dev-user"
+    try:
+        init_msg = json.loads(await websocket.receive_text())
+    except Exception:
+        init_msg = {}
     if _firebase_enabled():
         try:
-            init_msg = json.loads(await websocket.receive_text())
             token = init_msg.get("token", "")
             if not token:
                 await send({"type": "error", "message": "Unauthorized"})
                 return
-            decoded = fb_auth.verify_id_token(token)
-            uid = decoded["uid"]
+            if _FIREBASE_SERVICE_ACCOUNT_JSON or _FIREBASE_SERVICE_ACCOUNT_PATH:
+                decoded = fb_auth.verify_id_token(token)
+                uid = decoded["uid"]
+            else:
+                payload_jwt = _verify_firebase_token_manual(token, _FIREBASE_PROJECT_ID)
+                uid = payload_jwt["sub"]
         except Exception as e:
             await send({"type": "error", "message": f"Auth failed: {e}"})
             return
-    else:
-        # dev mode: skip auth handshake
-        await websocket.receive_text()  # consume init message
 
     cfg = _user_conns(uid).get(conn_id, {})
     db_type = cfg.get("type", "sqlite")
