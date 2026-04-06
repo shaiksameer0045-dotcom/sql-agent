@@ -1,0 +1,181 @@
+name: Build Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'           # triggers on v1.0.0, v1.2.3, etc.
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+permissions:
+  contents: write      # needed to create GitHub Releases
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14        # Apple Silicon + Intel (universal)
+            platform: mac
+            artifact: "*.dmg"
+          - os: windows-latest
+            platform: win
+            artifact: "*.exe"
+          - os: ubuntu-22.04
+            platform: linux
+            artifact: "*.AppImage"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Python setup ────────────────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      # ── Build Python server binary ───────────────────────────────────────
+      - name: Bundle server with PyInstaller (Mac/Linux)
+        if: matrix.platform != 'win'
+        run: pyinstaller server.spec --clean --noconfirm --distpath dist-server
+
+      - name: Bundle server with PyInstaller (Windows)
+        if: matrix.platform == 'win'
+        shell: cmd
+        run: pyinstaller server.spec --clean --noconfirm --distpath dist-server
+
+      # ── Node setup ──────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: electron/package.json
+
+      - name: Install Electron dependencies
+        working-directory: electron
+        run: npm ci
+
+      # ── Generate icons ───────────────────────────────────────────────────
+      - name: Generate .icns icon (Mac)
+        if: matrix.platform == 'mac'
+        run: |
+          mkdir -p electron/assets/icon.iconset
+          sips -z 16 16     static/icons/icon-512.png --out electron/assets/icon.iconset/icon_16x16.png
+          sips -z 32 32     static/icons/icon-512.png --out electron/assets/icon.iconset/icon_16x16@2x.png
+          sips -z 32 32     static/icons/icon-512.png --out electron/assets/icon.iconset/icon_32x32.png
+          sips -z 64 64     static/icons/icon-512.png --out electron/assets/icon.iconset/icon_32x32@2x.png
+          sips -z 128 128   static/icons/icon-512.png --out electron/assets/icon.iconset/icon_128x128.png
+          sips -z 256 256   static/icons/icon-512.png --out electron/assets/icon.iconset/icon_128x128@2x.png
+          sips -z 256 256   static/icons/icon-512.png --out electron/assets/icon.iconset/icon_256x256.png
+          sips -z 512 512   static/icons/icon-512.png --out electron/assets/icon.iconset/icon_256x256@2x.png
+          cp static/icons/icon-512.png electron/assets/icon.iconset/icon_512x512.png
+          cp static/icons/icon-512.png electron/assets/icon.iconset/icon_512x512@2x.png
+          iconutil -c icns electron/assets/icon.iconset -o electron/assets/icon.icns
+
+      - name: Generate .ico icon (Windows)
+        if: matrix.platform == 'win'
+        run: |
+          python -c "
+          import struct, zlib, shutil
+          shutil.copy('static/icons/icon-512.png', 'electron/assets/icon.png')
+          # Simple ICO: embed the PNG directly (modern Windows supports PNG in ICO)
+          png = open('static/icons/icon-192.png','rb').read()
+          ico = struct.pack('<HHH', 0, 1, 1)  # header
+          ico += struct.pack('<BBBBHHII', 0, 0, 0, 0, 1, 32, len(png), 22)  # dir entry
+          ico += png
+          open('electron/assets/icon.ico','wb').write(ico)
+          print('icon.ico created')
+          "
+
+      - name: Copy icon (Linux)
+        if: matrix.platform == 'linux'
+        run: cp static/icons/icon-512.png electron/assets/icon.png
+
+      # ── Build Electron app ───────────────────────────────────────────────
+      - name: Build Electron app (Mac)
+        if: matrix.platform == 'mac'
+        working-directory: electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false   # skip code signing for now
+        run: npm run build:mac -- --publish never
+
+      - name: Build Electron app (Windows)
+        if: matrix.platform == 'win'
+        working-directory: electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build:win -- --publish never
+
+      - name: Build Electron app (Linux)
+        if: matrix.platform == 'linux'
+        working-directory: electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build:linux -- --publish never
+
+      # ── Upload artifacts ─────────────────────────────────────────────────
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: QueryLux-${{ matrix.platform }}
+          path: |
+            dist-electron/${{ matrix.artifact }}
+            dist-electron/*.zip
+            dist-electron/*.deb
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ── Create GitHub Release ────────────────────────────────────────────────
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "QueryLux ${{ github.ref_name }}"
+          body: |
+            ## QueryLux ${{ github.ref_name }}
+
+            ### Download
+            | Platform | File |
+            |---|---|
+            | macOS (Apple Silicon + Intel) | `QueryLux-*.dmg` |
+            | Windows | `QueryLux-*-Setup.exe` |
+            | Linux | `QueryLux-*.AppImage` |
+
+            ### Install
+            - **Mac**: Open the `.dmg`, drag QueryLux to Applications
+            - **Windows**: Run the `.exe` installer
+            - **Linux**: `chmod +x QueryLux-*.AppImage && ./QueryLux-*.AppImage`
+
+            ### What's new
+            See [CHANGELOG](https://github.com/shaiksameer0045-dotcom/sql-agent/commits/main)
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: artifacts/**/*
+          token: ${{ secrets.GITHUB_TOKEN }}

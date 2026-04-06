@@ -14,10 +14,21 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
+
+# ── PyInstaller / desktop bundle path detection ───────────────────────────────
+# When bundled with PyInstaller, __file__ is inside a temp dir.
+# Static assets are included via --add-data and live in sys._MEIPASS.
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    _BASE_DIR = Path(sys._MEIPASS)
+else:
+    _BASE_DIR = Path(__file__).parent
+
+STATIC_DIR = _BASE_DIR / "static"
 
 # Encryption for stored passwords
 try:
@@ -113,7 +124,11 @@ _FIREBASE_INIT_ERROR: Optional[str] = None
 logger = logging.getLogger(__name__)
 
 
+_DESKTOP_MODE = os.environ.get("DESKTOP_MODE", "") == "1"
+
 def _firebase_enabled() -> bool:
+    if _DESKTOP_MODE:
+        return False   # desktop app runs fully local, no auth needed
     return bool(
         _FIREBASE_PROJECT_ID
         or _FIREBASE_SERVICE_ACCOUNT_JSON
@@ -145,9 +160,10 @@ _init_firebase()
 
 async def _get_uid(request: Request) -> str:
     """Extract and verify Firebase ID token → return uid. Raises 401 on failure."""
+    if _DESKTOP_MODE:
+        return "local-user"   # desktop app — single local user, no auth
     if not _firebase_enabled():
-        # Auth disabled (local dev) — use a fixed dev uid
-        return "dev-user"
+        return "dev-user"     # web dev mode
     if _FIREBASE_INIT_ERROR:
         raise HTTPException(status_code=503, detail="Firebase authentication is not configured correctly")
     auth_header = request.headers.get("Authorization", "")
@@ -931,10 +947,12 @@ def _seed_user_demos(uid: str):
 
 @app.on_event("startup")
 async def startup():
-    Path("static").mkdir(exist_ok=True)
+    STATIC_DIR.mkdir(parents=True, exist_ok=True)
     _load_shares()
     _load_alerts()
-    _seed_user_demos("dev-user")
+    # Seed demo data for the active local uid
+    seed_uid = "local-user" if _DESKTOP_MODE else "dev-user"
+    _seed_user_demos(seed_uid)
 
 
 def _seed_demo(conn_id: str, uid: str = "dev-user"):
@@ -1821,7 +1839,7 @@ async def get_share(share_id: str):
 
 @app.get("/share/{share_id}")
 async def serve_share_page(share_id: str):
-    return FileResponse("static/index.html")
+    return FileResponse(str(STATIC_DIR / "index.html"))
 
 
 # ── Admin stats ──────────────────────────────────────────────────────────────
@@ -2113,32 +2131,47 @@ async def health():
 
 @app.get("/")
 async def serve_index():
-    return FileResponse("static/index.html")
+    return FileResponse(str(STATIC_DIR / "index.html"))
 
 
 @app.get("/firebase-config.js")
 async def serve_firebase_config():
-    return FileResponse("static/firebase-config.js", media_type="application/javascript")
+    f = STATIC_DIR / "firebase-config.js"
+    if not f.exists():
+        # Desktop mode: serve empty config (no Firebase needed)
+        return StreamingResponse(
+            iter([b'window.FIREBASE_CONFIG = {};']),
+            media_type="application/javascript"
+        )
+    return FileResponse(str(f), media_type="application/javascript")
 
 
 @app.get("/manifest.json")
 async def serve_manifest():
-    return FileResponse("static/manifest.json", media_type="application/manifest+json")
+    return FileResponse(str(STATIC_DIR / "manifest.json"), media_type="application/manifest+json")
 
 
 @app.get("/sw.js")
 async def serve_sw():
-    # Service workers must be served from root scope with correct content-type
-    return FileResponse("static/sw.js", media_type="application/javascript",
+    return FileResponse(str(STATIC_DIR / "sw.js"), media_type="application/javascript",
                         headers={"Service-Worker-Allowed": "/"})
 
 
 @app.get("/icons/{filename}")
 async def serve_icon(filename: str):
-    path = Path(f"static/icons/{filename}")
-    if not path.exists() or not path.is_file():
+    icon_path = STATIC_DIR / "icons" / filename
+    if not icon_path.exists() or not icon_path.is_file():
         raise HTTPException(status_code=404, detail="Icon not found")
-    suffix = path.suffix.lower()
+    suffix = icon_path.suffix.lower().lstrip(".")
     media = {"png": "image/png", "jpg": "image/jpeg", "svg": "image/svg+xml",
-             "webp": "image/webp"}.get(suffix.lstrip("."), "application/octet-stream")
-    return FileResponse(str(path), media_type=media, headers={"Cache-Control": "public, max-age=86400"})
+             "webp": "image/webp"}.get(suffix, "application/octet-stream")
+    return FileResponse(str(icon_path), media_type=media,
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
+# ── Entry point (for PyInstaller / Electron direct launch) ────────────────────
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8766))
+    host = os.environ.get("HOST", "127.0.0.1")
+    uvicorn.run(app, host=host, port=port, log_level="warning")

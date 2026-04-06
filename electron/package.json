@@ -1,0 +1,96 @@
+{
+  "name": "querylux",
+  "version": "1.0.0",
+  "description": "AI-powered SQL workspace — connect any database, query with natural language",
+  "main": "main.js",
+  "author": {
+    "name": "QueryLux",
+    "email": "hello@querylux.app"
+  },
+  "scripts": {
+    "start": "electron .",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux",
+    "build:all": "electron-builder -mwl"
+  },
+  "devDependencies": {
+    "electron": "^28.3.0",
+    "electron-builder": "^24.13.0"
+  },
+  "build": {
+    "appId": "app.querylux.desktop",
+    "productName": "QueryLux",
+    "copyright": "Copyright © 2025 QueryLux",
+    "directories": {
+      "output": "../dist-electron",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "splash.html",
+      "assets/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist-server/",
+        "to": "server",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../static/",
+        "to": "static",
+        "filter": ["**/*"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ]
+    },
+    "dmg": {
+      "title": "QueryLux",
+      "background": "assets/dmg-background.png",
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ],
+      "window": { "width": 540, "height": 380 }
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "QueryLux"
+    },
+    "linux": {
+      "icon": "assets/icon.png",
+      "category": "Development",
+      "target": ["AppImage", "deb"],
+      "desktop": {
+        "Name": "QueryLux",
+        "Comment": "AI-powered SQL workspace",
+        "Categories": "Development;Database;"
+      }
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "shaiksameer0045-dotcom",
+      "repo": "sql-agent"
+    }
+  }
+}

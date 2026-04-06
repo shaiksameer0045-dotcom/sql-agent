@@ -15,3 +15,10 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+
+# Desktop build outputs
+dist-server/
+dist-electron/
+electron/node_modules/
+build/
+*.spec.bak
