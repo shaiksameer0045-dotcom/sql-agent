@@ -1206,6 +1206,22 @@ async def add_connection(request: Request, req: ConnectionCreate):
     return {"id": cid, "name": cfg["name"], "connected": True}
 
 
+@app.post("/api/connections/test-config")
+async def test_config(request: Request, req: ConnectionCreate):
+    """Test connection parameters without saving — no side effects."""
+    await _get_uid(request)
+    cfg = {"id": "_test_", **req.dict()}
+    try:
+        conn = _open_connection(cfg)
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"ok": True, "message": "Connection successful"}
+    except Exception as e:
+        return {"ok": False, "message": str(e)}
+
+
 @app.post("/api/connections/{conn_id}/test")
 async def test_connection(request: Request, conn_id: str):
     uid = await _get_uid(request)

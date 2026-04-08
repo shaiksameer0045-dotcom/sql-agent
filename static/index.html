@@ -744,6 +744,41 @@
     cursor: pointer; font-size: 18px; padding: 4px 8px;
   }
 
+  /* ── Nav search input ── */
+  #nav-search-wrap { padding: 6px 8px; border-bottom: 1px solid #313244; flex-shrink: 0; }
+  #nav-search {
+    width: 100%; background: #1e1e2e; border: 1px solid #313244; border-radius: 5px;
+    color: #cdd6f4; padding: 5px 9px; font-size: 11px; font-family: inherit; box-sizing: border-box;
+  }
+  #nav-search:focus { outline: none; border-color: #7c5cfc; }
+  #nav-search::placeholder { color: #585b70; }
+
+  /* ── Command Palette ── */
+  #cmd-overlay {
+    display: none; position: fixed; inset: 0; z-index: 2000;
+    background: rgba(0,0,0,.6); align-items: flex-start; justify-content: center; padding-top: 80px;
+  }
+  #cmd-overlay.open { display: flex; }
+  #cmd-palette {
+    background: #24273a; border: 1px solid #45475a; border-radius: 10px;
+    width: 560px; max-width: 95vw; box-shadow: 0 24px 64px rgba(0,0,0,.6); overflow: hidden;
+  }
+  #cmd-input {
+    width: 100%; background: transparent; border: none; border-bottom: 1px solid #313244;
+    color: #cdd6f4; padding: 14px 16px; font-size: 14px; font-family: inherit; box-sizing: border-box;
+  }
+  #cmd-input:focus { outline: none; }
+  #cmd-results { max-height: 360px; overflow-y: auto; }
+  .cmd-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+    cursor: pointer; font-size: 13px; transition: background .1s;
+  }
+  .cmd-item:hover, .cmd-item.selected { background: #313244; }
+  .cmd-item-icon { font-size: 16px; width: 22px; text-align: center; flex-shrink: 0; }
+  .cmd-item-label { flex: 1; }
+  .cmd-item-hint { font-size: 10px; color: #585b70; }
+  .cmd-section-hdr { padding: 6px 16px 4px; font-size: 10px; font-weight: 700; letter-spacing: .08em; color: #585b70; text-transform: uppercase; }
+
   /* ── Autocomplete dropdown ── */
   .autocomplete-wrap { position: relative; }
   #autocomplete-list {
@@ -1290,6 +1325,14 @@
       </div>
       <div id="upload-status"></div>
     </div>
+  </div>
+</div>
+
+<!-- Command Palette -->
+<div id="cmd-overlay" onclick="if(event.target===this)closeCommandPalette()">
+  <div id="cmd-palette">
+    <input id="cmd-input" placeholder="Type a command or search…" oninput="renderCmdResults(this.value)" onkeydown="cmdKeyDown(event)" autocomplete="off" spellcheck="false">
+    <div id="cmd-results"></div>
   </div>
 </div>
 
@@ -2045,15 +2088,13 @@ async function testConn() {
       const d = await r.json();
       ok = d.ok; message = d.message;
     } else {
+      // Test-only endpoint — no side effects, no connection saved
       const d = getFormData();
-      const r = await fetch('/api/connections', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d) });
+      const r = await fetch('/api/connections/test-config', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d),
+      });
       const data = await r.json();
-      if (data.id) {
-        await fetch(`/api/connections/${data.id}`, { method: 'DELETE' });
-        ok = true; message = 'Connection successful!';
-      } else {
-        ok = false; message = data.detail || 'Connection failed';
-      }
+      ok = data.ok; message = data.message || (ok ? 'Connection successful!' : 'Connection failed');
     }
     resultEl.className = 'test-result ' + (ok ? 'test-ok' : 'test-err');
     resultEl.textContent = message;
@@ -2982,7 +3023,8 @@ function filterNavTree(q) {
     let connMatch = false;
     tables.forEach(row => {
       const name = row.querySelector('.tree-table-name')?.textContent.toLowerCase() || '';
-      const colRows = row.parentElement?.nextElementSibling?.querySelectorAll('.tree-col-row') || [];
+      // colDiv is the next sibling of row inside their shared parent (outer div)
+      const colRows = row.nextElementSibling?.querySelectorAll('.tree-col-row') || [];
       let match = !q || name.includes(q);
       colRows.forEach(cr => {
         const cn = cr.textContent.toLowerCase();
@@ -3201,7 +3243,12 @@ let _chatWs = null;
 
 async function initChat() {
   const msgs = document.getElementById('chat-messages');
-  if (_chatWs && _chatWs.readyState === WebSocket.OPEN) return;
+  // Close existing WS (e.g. user switched to a different connection)
+  if (_chatWs) {
+    _chatWs.onclose = null;
+    _chatWs.close();
+    _chatWs = null;
+  }
   msgs.innerHTML = `<div class="status-empty"><div class="icon">🗨</div><div class="title">Connecting…</div></div>`;
 
   const token = await getIdToken();
@@ -3543,6 +3590,148 @@ async function triggerInstall() {
     hideInstallButton();
   }
 }
+
+// ── SQL Formatter ──────────────────────────────────────────────────────────
+function formatSQL() {
+  const ed = document.getElementById('sql-editor');
+  const sql = ed.value.trim();
+  if (!sql) return;
+
+  const KW = ['SELECT','FROM','WHERE','JOIN','LEFT JOIN','RIGHT JOIN','INNER JOIN','OUTER JOIN','CROSS JOIN',
+    'GROUP BY','ORDER BY','HAVING','LIMIT','OFFSET','UNION','UNION ALL','INTERSECT','EXCEPT',
+    'INSERT INTO','UPDATE','DELETE FROM','CREATE TABLE','ALTER TABLE','DROP TABLE',
+    'WITH','AS','ON','AND','OR','NOT','IN','IS NULL','IS NOT NULL','BETWEEN','LIKE','ILIKE',
+    'CASE','WHEN','THEN','ELSE','END','DISTINCT','COUNT','SUM','AVG','MIN','MAX','COALESCE',
+    'CAST','OVER','PARTITION BY','ROW_NUMBER','RANK','DENSE_RANK','LAG','LEAD'];
+
+  // Tokenize: preserve strings and then uppercase keywords
+  let out = sql;
+  // Temporarily protect string literals
+  const strings = [];
+  out = out.replace(/'[^']*'/g, m => { strings.push(m); return `__STR${strings.length-1}__`; });
+  out = out.replace(/"[^"]*"/g, m => { strings.push(m); return `__STR${strings.length-1}__`; });
+
+  // Uppercase keywords
+  KW.forEach(kw => {
+    const re = new RegExp('\\b' + kw.replace(/ /g, '\\s+') + '\\b', 'gi');
+    out = out.replace(re, kw);
+  });
+
+  // Add newlines before major clauses
+  const NEWLINE_KW = ['SELECT','FROM','WHERE','GROUP BY','ORDER BY','HAVING','LIMIT','OFFSET',
+    'LEFT JOIN','RIGHT JOIN','INNER JOIN','OUTER JOIN','CROSS JOIN','JOIN',
+    'UNION ALL','UNION','INTERSECT','EXCEPT','WITH'];
+  NEWLINE_KW.forEach(kw => {
+    const re = new RegExp('(?<!\\n)\\s+\\b(' + kw.replace(/ /g, '\\s+') + ')\\b', 'g');
+    out = out.replace(re, '\n$1');
+  });
+
+  // Indent subqueries (basic: lines after SELECT indent 2 spaces)
+  out = out.split('\n').map((line, i) => {
+    line = line.trim();
+    if (i === 0) return line;
+    const isClause = NEWLINE_KW.some(kw => line.toUpperCase().startsWith(kw));
+    return isClause ? line : '  ' + line;
+  }).join('\n');
+
+  // Restore strings
+  out = out.replace(/__STR(\d+)__/g, (_, i) => strings[parseInt(i)]);
+
+  ed.value = out;
+  showToast('SQL formatted', 'success');
+}
+
+// ── Command Palette ────────────────────────────────────────────────────────
+const CMD_ACTIONS = [
+  { icon: '➕', label: 'New Connection', hint: '', action: () => openConnModal() },
+  { icon: '💬', label: 'Ask AI (NL Query)', hint: 'Tab: Ask AI', action: () => switchTab('nl') },
+  { icon: '⌨', label: 'SQL Editor', hint: 'Tab: SQL Editor', action: () => { switchTab('sql'); document.getElementById('sql-editor').focus(); } },
+  { icon: '🗨', label: 'AI Chat', hint: 'Tab: AI Chat', action: () => switchTab('chat') },
+  { icon: '🗂', label: 'ER Diagram', hint: 'Tab: ER Diagram', action: () => switchTab('er') },
+  { icon: '🔔', label: 'Scheduled Alerts', hint: 'Tab: Alerts', action: () => switchTab('alerts') },
+  { icon: '🔖', label: 'Saved Queries', hint: 'Tab: Saved', action: () => switchTab('saved') },
+  { icon: '🕐', label: 'Query History', hint: 'Tab: History', action: () => switchTab('history') },
+  { icon: '📊', label: 'Admin Dashboard', hint: 'Tab: Admin', action: () => switchTab('admin') },
+  { icon: '▶', label: 'Run SQL', hint: 'Ctrl+Enter', action: () => runSQL() },
+  { icon: '⚡', label: 'Optimize SQL', hint: '', action: () => optimizeSQL() },
+  { icon: '🎨', label: 'Format SQL', hint: 'Ctrl+Shift+F', action: () => formatSQL() },
+  { icon: '⬇', label: 'Export CSV', hint: '', action: () => exportCSV() },
+  { icon: '⬇', label: 'Export JSON', hint: '', action: () => exportJSON() },
+  { icon: '🔗', label: 'Share Results', hint: '', action: () => shareResults() },
+  { icon: '✨', label: 'AI Data Story', hint: '', action: () => aiStory() },
+  { icon: '🩺', label: 'Schema Doctor', hint: '', action: () => activeConnId && runSchemaDoctor(activeConnId) },
+  { icon: '💡', label: 'AI Query Suggestions', hint: '', action: () => activeConnId && loadSuggestQueries(activeConnId) },
+  { icon: '⬆', label: 'Upload CSV / JSON', hint: '', action: () => openUpload() },
+  { icon: '⌨', label: 'Keyboard Shortcuts', hint: '?', action: () => showKeyboardShortcuts() },
+  { icon: '🏠', label: 'Show Onboarding', hint: '', action: () => showOnboarding() },
+];
+
+let _cmdIndex = -1;
+let _cmdFiltered = CMD_ACTIONS;
+
+function openCommandPalette() {
+  _cmdIndex = -1;
+  _cmdFiltered = CMD_ACTIONS;
+  document.getElementById('cmd-overlay').classList.add('open');
+  const inp = document.getElementById('cmd-input');
+  inp.value = '';
+  renderCmdResults('');
+  setTimeout(() => inp.focus(), 50);
+}
+
+function closeCommandPalette() {
+  document.getElementById('cmd-overlay').classList.remove('open');
+  _cmdIndex = -1;
+}
+
+function renderCmdResults(q) {
+  q = q.toLowerCase().trim();
+  _cmdFiltered = q ? CMD_ACTIONS.filter(a => a.label.toLowerCase().includes(q)) : CMD_ACTIONS;
+  _cmdIndex = -1;
+  const el = document.getElementById('cmd-results');
+  if (!_cmdFiltered.length) {
+    el.innerHTML = '<div style="padding:16px;color:#585b70;font-size:12px;text-align:center;">No commands found</div>';
+    return;
+  }
+  el.innerHTML = _cmdFiltered.map((a, i) => `
+    <div class="cmd-item" data-idx="${i}" onclick="runCmdItem(${i})">
+      <span class="cmd-item-icon">${a.icon}</span>
+      <span class="cmd-item-label">${esc(a.label)}</span>
+      ${a.hint ? `<span class="cmd-item-hint">${esc(a.hint)}</span>` : ''}
+    </div>`).join('');
+}
+
+function cmdKeyDown(e) {
+  const items = document.querySelectorAll('.cmd-item');
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _cmdIndex = Math.min(_cmdIndex + 1, items.length - 1);
+    items.forEach((el, i) => el.classList.toggle('selected', i === _cmdIndex));
+    items[_cmdIndex]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _cmdIndex = Math.max(_cmdIndex - 1, 0);
+    items.forEach((el, i) => el.classList.toggle('selected', i === _cmdIndex));
+    items[_cmdIndex]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const idx = _cmdIndex >= 0 ? _cmdIndex : 0;
+    if (_cmdFiltered[idx]) runCmdItem(idx);
+  } else if (e.key === 'Escape') {
+    closeCommandPalette();
+  }
+}
+
+function runCmdItem(idx) {
+  closeCommandPalette();
+  _cmdFiltered[idx]?.action();
+}
+
+// Ctrl+K → open command palette
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'k') { e.preventDefault(); openCommandPalette(); }
+  if (e.ctrlKey && e.shiftKey && e.key === 'F') { e.preventDefault(); formatSQL(); }
+});
 </script>
 </body>
 </html>
