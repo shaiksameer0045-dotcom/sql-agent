@@ -299,6 +299,122 @@ def test_mysql():
     rm_conn(cid)
     ok("MySQL: connection deleted")
 
+# ── MariaDB ───────────────────────────────────────────────────────────────────
+
+def test_mariadb():
+    print("\n── MariaDB ────────────────────────────────────────────────────")
+    host = os.environ.get("MARIA_HOST", "localhost")
+    port = int(os.environ.get("MARIA_PORT", 3307))
+    db   = os.environ.get("MARIA_DB", "testdb")
+    user = os.environ.get("MARIA_USER", "testuser")
+    pw   = os.environ.get("MARIA_PASS", "testpass")
+
+    try:
+        import pymysql
+        conn = pymysql.connect(host=host, port=port, database=db,
+                               user=user, password=pw, connect_timeout=5)
+        conn.close()
+    except Exception as e:
+        print(f"  ⚠  MariaDB not available ({e}) — skipping")
+        return
+
+    # MariaDB is wire-compatible with MySQL — use type "mysql"
+    cid = add_conn({
+        "name": "Test MariaDB", "type": "mysql",
+        "host": host, "port": port,
+        "database": db, "user": user, "password": pw
+    })
+    ok("MariaDB: connection created")
+
+    test_query(cid, "DROP TABLE IF EXISTS `maria_test_logs`", "MariaDB")
+    test_query(cid, """
+        CREATE TABLE `maria_test_logs` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `level` ENUM('INFO','WARN','ERROR') NOT NULL,
+            `message` TEXT,
+            `ts` DATETIME DEFAULT NOW()
+        )
+    """, "MariaDB")
+    test_query(cid, """
+        INSERT INTO `maria_test_logs` (`level`, `message`) VALUES
+        ('INFO',  'Server started'),
+        ('WARN',  'Disk usage at 80%'),
+        ('ERROR', 'Connection timeout'),
+        ('INFO',  'Cache cleared'),
+        ('ERROR', 'Out of memory')
+    """, "MariaDB")
+
+    test_schema(cid, "MariaDB")
+    test_query(cid, "SELECT * FROM `maria_test_logs`", "MariaDB", "message")
+    test_query(cid, "SELECT `level`, COUNT(*) as cnt FROM `maria_test_logs` GROUP BY `level` ORDER BY cnt DESC", "MariaDB", "cnt")
+    test_query(cid, "SELECT `message` FROM `maria_test_logs` WHERE `level`='ERROR'", "MariaDB", "message")
+
+    # MariaDB-specific: JSON_OBJECT
+    test_query(cid, "SELECT JSON_OBJECT('id', id, 'level', `level`) as j FROM `maria_test_logs` LIMIT 2", "MariaDB", "j")
+
+    test_preview(cid, "maria_test_logs", "MariaDB")
+
+    test_query(cid, "DROP TABLE `maria_test_logs`", "MariaDB")
+    rm_conn(cid)
+    ok("MariaDB: connection deleted")
+
+
+# ── postgres-dummy (user's own Docker container) ──────────────────────────────
+
+def test_postgres_dummy():
+    print("\n── postgres-dummy (port 5433) ─────────────────────────────────")
+    host = os.environ.get("PG2_HOST", "127.0.0.1")
+    port = int(os.environ.get("PG2_PORT", 5433))
+    db   = os.environ.get("PG2_DB", "mydb")
+    user = os.environ.get("PG2_USER", "myuser")
+    pw   = os.environ.get("PG2_PASS", "password")
+
+    try:
+        import psycopg2
+        conn = psycopg2.connect(host=host, port=port, dbname=db,
+                                user=user, password=pw, connect_timeout=5)
+        conn.close()
+    except Exception as e:
+        print(f"  ⚠  postgres-dummy not available ({e}) — skipping")
+        return
+
+    cid = add_conn({
+        "name": "Test postgres-dummy", "type": "postgresql",
+        "host": host, "port": port,
+        "database": db, "user": user, "password": pw
+    })
+    ok("postgres-dummy: connection created")
+
+    test_query(cid, 'DROP TABLE IF EXISTS "dummy_test_events"', "postgres-dummy")
+    test_query(cid, """
+        CREATE TABLE "dummy_test_events" (
+            event_id SERIAL PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            payload JSONB,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """, "postgres-dummy")
+    test_query(cid, """
+        INSERT INTO "dummy_test_events" (event_type, payload) VALUES
+        ('click',    '{"page": "home",    "user": 1}'),
+        ('purchase', '{"item": "widget",  "price": 9.99}'),
+        ('login',    '{"user": 2,         "ip": "1.2.3.4"}'),
+        ('click',    '{"page": "pricing", "user": 3}')
+    """, "postgres-dummy")
+
+    test_schema(cid, "postgres-dummy")
+    test_query(cid, 'SELECT * FROM "dummy_test_events"', "postgres-dummy", "event_type")
+    test_query(cid, 'SELECT event_type, COUNT(*) as cnt FROM "dummy_test_events" GROUP BY event_type ORDER BY cnt DESC', "postgres-dummy", "cnt")
+    # JSONB-specific
+    test_query(cid, """SELECT payload->>'page' as page FROM "dummy_test_events" WHERE event_type='click'""", "postgres-dummy", "page")
+
+    test_preview(cid, "dummy_test_events", "postgres-dummy")
+
+    test_query(cid, 'DROP TABLE "dummy_test_events"', "postgres-dummy")
+    rm_conn(cid)
+    ok("postgres-dummy: connection deleted")
+
+
 # ── Demo connections (auto-seeded) ────────────────────────────────────────────
 
 def test_demo_connections():
@@ -350,6 +466,8 @@ if __name__ == "__main__":
     test_duckdb()
     test_postgresql()
     test_mysql()
+    test_mariadb()
+    test_postgres_dummy()
 
     # Summary
     total = len(PASS) + len(FAIL)
