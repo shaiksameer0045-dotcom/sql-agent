@@ -2264,16 +2264,6 @@ async def serve_firebase_config():
     return FileResponse(str(f), media_type="application/javascript")
 
 
-@app.get("/manifest.json")
-async def serve_manifest():
-    return FileResponse(str(STATIC_DIR / "manifest.json"), media_type="application/manifest+json")
-
-
-@app.get("/sw.js")
-async def serve_sw():
-    return FileResponse(str(STATIC_DIR / "sw.js"), media_type="application/javascript",
-                        headers={"Service-Worker-Allowed": "/"})
-
 
 @app.get("/icons/{filename}")
 async def serve_icon(filename: str):
